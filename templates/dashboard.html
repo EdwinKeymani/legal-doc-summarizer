@@ -1,0 +1,264 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Legal Tech Suite{% endblock %}
+
+{% block content %}
+
+<!-- 1. DASHBOARD VIEW -->
+<section id="dashboard-view" class="view-content active">
+  <h1 class="page-title">Executive Dashboard</h1>
+
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-title">TOTAL ANALYZED DOCS</div>
+      <div class="metric-value">{{ total_documents }}</div>
+      <div class="metric-trend"><i class="fa-solid fa-file-lines"></i> All time</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">HIGH RISK CLAUSES</div>
+      <div class="metric-value" style="color: var(--danger);">{{ high_risk_count }}</div>
+      <div class="metric-trend" style="color: var(--danger);"><i class="fa-solid fa-triangle-exclamation"></i> Flagged for review</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">PROCESSED TODAY</div>
+      <div class="metric-value">{{ processed_today }}</div>
+      <div class="metric-trend"><i class="fa-solid fa-clock"></i> Since midnight</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-title">DOCUMENTS PENDING</div>
+      <div class="metric-value">{{ pending_count }}</div>
+      <div class="metric-trend"><i class="fa-solid fa-hourglass-half"></i> Awaiting processing</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Recent Activity</div>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Document</th>
+          <th>Format</th>
+          <th>Status</th>
+          <th>Uploaded</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for document in documents[:5] %}
+        <tr>
+          <td>{{ document.file_name }}</td>
+          <td>{{ document.file_format }}</td>
+          <td>
+            {% if document.status == 'Processed' %}
+              <span class="status-badge status-low">{{ document.status }}</span>
+            {% else %}
+              <span class="status-badge status-medium">{{ document.status }}</span>
+            {% endif %}
+          </td>
+          <td>{{ document.upload_date.strftime('%b %d, %Y %H:%M') }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty-state">No activity yet. Upload a document from the Document Analyzer tab.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 2. DOCUMENT ANALYZER VIEW -->
+<section id="analyzer-view" class="view-content">
+  <h1 class="page-title">Document Analyzer</h1>
+
+  <div class="notice-banner">
+    <div class="notice-content">
+      <h5>Automated Legal Ingestion &amp; Analysis</h5>
+      <ul>
+        <li>Upload commercial agreements, NDAs, or contracts to generate a summary.</li>
+        <li>The system isolates clauses and assesses their risk severity.</li>
+      </ul>
+    </div>
+    <div class="notice-badges">
+      <span class="badge-tag"><i class="fa-solid fa-bolt"></i> Hybrid NLP</span>
+    </div>
+  </div>
+
+  <!-- Everything the analysis needs is inside ONE form so the dropdowns and
+       the file submit together. -->
+  <form action="{{ url_for('upload_document') }}" method="POST" enctype="multipart/form-data">
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <i class="fa-solid fa-sliders" style="color: var(--primary-green);"></i> Analysis Configuration
+        </div>
+      </div>
+      <div class="controls-grid">
+        <div class="field-group">
+          <label>Summary Depth</label>
+          <select name="summary_depth">
+            <option>Executive Summary</option>
+            <option>Detailed Clauses</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label>Extraction Mode</label>
+          <select name="extraction_mode">
+            <option>Abstractive &amp; Extractive</option>
+            <option>Extractive Only</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label>Risk Detection Level</label>
+          <select name="risk_level">
+            <option>High &amp; Medium Risk</option>
+            <option>High Risk Only</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label>Context Hint</label>
+          <select name="jurisdiction">
+            <option>General Commercial</option>
+            <option>Employment</option>
+            <option>Property / Lease</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">
+        <div class="card-title">
+          <i class="fa-solid fa-cloud-arrow-up" style="color: var(--primary-green);"></i> Upload Source Document
+        </div>
+      </div>
+      <div class="upload-box" onclick="document.getElementById('file-input').click()">
+        <div class="upload-icon"><i class="fa-solid fa-cloud-arrow-up"></i></div>
+        <div class="upload-text-main">Click to upload or drag and drop document</div>
+        <div class="upload-text-sub">Max. File Size: 25MB. Supports PDF, DOCX, TXT</div>
+        <input type="file" id="file-input" name="document" class="file-input" accept=".pdf,.docx,.txt">
+      </div>
+      <div id="file-chip" class="uploaded-file-chip" style="display: none;">
+        <i class="fa-solid fa-file-lines" style="color: var(--primary-green);"></i>
+        <span id="file-chip-name"></span>
+      </div>
+    </div>
+
+    <button type="submit" class="btn-submit-analysis">
+      <i class="fa-solid fa-microchip"></i> Process &amp; Analyze Document
+    </button>
+  </form>
+</section>
+
+<!-- 3. MY DOCUMENTS VIEW -->
+<section id="documents-view" class="view-content">
+  <h1 class="page-title">Document Repository</h1>
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><i class="fa-solid fa-folder-open" style="color: var(--primary-green);"></i> Saved Legal Files</div>
+    </div>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Document Name</th>
+          <th>Format</th>
+          <th>Upload Date</th>
+          <th>Status</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for document in documents %}
+        <tr>
+          <td>{{ document.file_name }}</td>
+          <td>{{ document.file_format }}</td>
+          <td>{{ document.upload_date.strftime('%b %d, %Y') }}</td>
+          <td>
+            {% if document.status == 'Processed' %}
+              <span class="status-badge status-low">{{ document.status }}</span>
+            {% else %}
+              <span class="status-badge status-medium">{{ document.status }}</span>
+            {% endif %}
+          </td>
+          <td>
+            <a href="{{ url_for('view_document', document_id=document.id) }}"
+               style="color: var(--primary-green); font-weight: 600; text-decoration: none;">View Report</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty-state">No documents yet. Upload one from the Document Analyzer tab.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- 4. SETTINGS VIEW -->
+<section id="settings-view" class="view-content">
+  <h1 class="page-title">Settings</h1>
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><i class="fa-solid fa-user" style="color: var(--primary-green);"></i> Profile</div>
+    </div>
+    <div class="controls-grid" style="grid-template-columns: 1fr 1fr;">
+      <div class="field-group">
+        <label>Full Name</label>
+        <input type="text" value="{{ user_name or '' }}" readonly>
+      </div>
+      <div class="field-group">
+        <label>Email</label>
+        <input type="text" value="{{ user_email or '' }}" readonly>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><i class="fa-solid fa-robot" style="color: var(--primary-green);"></i> AI Configuration</div>
+    </div>
+    <p class="summary-prose" style="font-size: 13px; color: var(--text-muted);">
+      Risk assessment is powered by Google Gemini. The API key is read from the
+      <strong>GEMINI_API_KEY</strong> environment variable on the server and is never
+      stored in the application or exposed here. If no key is configured, documents
+      are still summarized locally and clauses are marked "Review".
+    </p>
+  </div>
+</section>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Tab navigation between the views on this page
+  document.addEventListener('DOMContentLoaded', () => {
+    const navItems = document.querySelectorAll('.nav-list .nav-item');
+    const viewContents = document.querySelectorAll('.view-content');
+
+    navItems.forEach(item => {
+      item.addEventListener('click', () => {
+        const targetViewId = item.getAttribute('data-view');
+        if (!targetViewId) return;
+
+        navItems.forEach(nav => nav.classList.remove('active'));
+        item.classList.add('active');
+
+        viewContents.forEach(view => view.classList.remove('active'));
+        const targetView = document.getElementById(targetViewId);
+        if (targetView) targetView.classList.add('active');
+      });
+    });
+
+    // Show the chosen filename before submitting
+    const fileInput = document.getElementById('file-input');
+    if (fileInput) {
+      fileInput.addEventListener('change', function () {
+        const chip = document.getElementById('file-chip');
+        const chipName = document.getElementById('file-chip-name');
+        if (this.files.length) {
+          chipName.textContent = this.files[0].name;
+          chip.style.display = 'flex';
+        }
+      });
+    }
+  });
+</script>
+{% endblock %}

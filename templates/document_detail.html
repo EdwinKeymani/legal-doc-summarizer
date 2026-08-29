@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}{{ document.file_name }} - Analysis{% endblock %}
+
+{% block content %}
+
+<a href="{{ url_for('dashboard') }}" style="color: var(--primary-green); font-weight: 600; text-decoration: none; font-size: 13px;">
+  <i class="fa-solid fa-arrow-left"></i> Back to Dashboard
+</a>
+
+<h1 class="page-title" style="margin-top: 16px;">{{ document.file_name }}</h1>
+<p style="color: var(--text-muted); font-size: 13px; margin-bottom: 24px;">
+  {{ document.file_format }} &middot; Uploaded {{ document.upload_date.strftime('%b %d, %Y at %H:%M') }} &middot; {{ document.status }}
+</p>
+
+<!-- Summary -->
+<div class="card">
+  <div class="card-header">
+    <div class="card-title"><i class="fa-solid fa-align-left" style="color: var(--primary-green);"></i> Summary</div>
+  </div>
+  <div class="summary-prose">{{ document.summary_text }}</div>
+</div>
+
+<!-- Flagged clauses -->
+<div class="card">
+  <div class="card-header">
+    <div class="card-title">
+      <i class="fa-solid fa-triangle-exclamation" style="color: var(--danger);"></i>
+      Flagged Clauses ({{ document.clauses | length }})
+    </div>
+  </div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Category</th>
+        <th>Extracted Text</th>
+        <th>Risk</th>
+        <th>Assessment</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for clause in document.clauses %}
+      <tr>
+        <td>{{ clause.clause_category }}</td>
+        <td style="max-width: 320px;">{{ clause.extracted_text }}</td>
+        <td>
+          {% if clause.risk_severity == 'High' %}
+            <span class="status-badge status-high">High Risk</span>
+          {% elif clause.risk_severity == 'Medium' %}
+            <span class="status-badge status-medium">Medium Risk</span>
+          {% elif clause.risk_severity == 'Low' %}
+            <span class="status-badge status-low">Low Risk</span>
+          {% else %}
+            <span class="status-badge status-review">Review</span>
+          {% endif %}
+        </td>
+        <td class="assessment-text">{{ clause.explanation }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="empty-state">No clauses were flagged in this document.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+{% endblock %}

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Legal Tech Suite{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+</head>
+<body>
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div>
+      <div class="brand-logo">
+        <i class="fa-solid fa-scale-balanced"></i>
+        <span>Legal AI</span>
+      </div>
+
+      <ul class="nav-list">
+        <li class="nav-item {% if active_view == 'dashboard' %}active{% endif %}" data-view="dashboard-view">
+          <button><i class="fa-solid fa-house"></i> Dashboard</button>
+        </li>
+        <li class="nav-item {% if active_view == 'analyzer' %}active{% endif %}" data-view="analyzer-view">
+          <button><i class="fa-solid fa-file-contract"></i> Document Analyzer</button>
+        </li>
+        <li class="nav-item {% if active_view == 'documents' %}active{% endif %}" data-view="documents-view">
+          <button><i class="fa-solid fa-folder-open"></i> My Documents</button>
+        </li>
+        <li class="nav-item {% if active_view == 'settings' %}active{% endif %}" data-view="settings-view">
+          <button><i class="fa-solid fa-gear"></i> Settings</button>
+        </li>
+      </ul>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="user-profile">
+        <div class="user-info">
+          <div class="avatar">{{ user_initials }}</div>
+          <div class="user-details">
+            <h4>{{ user_name or 'User' }}</h4>
+          </div>
+        </div>
+        <a href="{{ url_for('logout') }}" title="Log out">
+          <i class="fa-solid fa-right-from-bracket" style="color: var(--text-muted); cursor: pointer;"></i>
+        </a>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Main Panel Wrapper -->
+  <main class="main-wrapper">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="flash-message {{ 'success' if category == 'success' else '' }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    {% block content %}{% endblock %}
+  </main>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

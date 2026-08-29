@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign Up - Legal Document Summarizer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <link rel="stylesheet" href="{{ url_for('static', filename='auth.css') }}">
+</head>
+<body>
+
+  <div class="container">
+    <!-- Left Banner -->
+    <div class="brand-panel">
+      <div class="quote-header">
+        Legal Tech Suite
+      </div>
+      <div class="quote-content">
+        <h1 class="quote-title">Legal Document<br>Summarizer</h1>
+        <p class="quote-text">
+          Automated summarization, clause isolation, and risk assessment for complex legal contracts.
+        </p>
+      </div>
+    </div>
+
+    <!-- Right Form -->
+    <div class="form-panel">
+      <div class="form-wrapper">
+        <div class="form-header">
+          <h2>Create Account</h2>
+          <p>Enter your details to get started</p>
+        </div>
+
+        {% with messages = get_flashed_messages() %}
+          {% if messages %}
+            <div class="flash-message">{{ messages[0] }}</div>
+          {% endif %}
+        {% endwith %}
+
+        <form action="{{ url_for('register') }}" method="POST">
+          <div class="form-group">
+            <label for="full_name">Full Name</label>
+            <div class="input-wrapper">
+              <input type="text" id="full_name" name="full_name" placeholder="Enter your full name" required>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="email">Email</label>
+            <div class="input-wrapper">
+              <input type="email" id="email" name="email" placeholder="Enter your email" required>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="password">Password</label>
+            <div class="input-wrapper">
+              <input type="password" id="password" name="password" placeholder="Create a password (min. 8 characters)" required minlength="8">
+            </div>
+          </div>
+
+          <button type="submit" class="btn-submit" style="margin-top: 8px;">Create Account</button>
+        </form>
+      </div>
+
+      <div class="signup-text">
+        Already have an account? <a href="{{ url_for('login') }}">Sign In</a>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
