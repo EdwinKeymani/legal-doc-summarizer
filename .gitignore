@@ -3,3 +3,9 @@ uploads/
 *.db
 __pycache__/
 .env
+venv/
+__pycache__/
+*.pyc
+uploads/
+legal.db
+.env

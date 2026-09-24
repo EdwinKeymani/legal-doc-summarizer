@@ -3,17 +3,19 @@ Legal Document Summarizer - Backend POC
 Single-file Flask application. Local only: SQLite + local file storage.
 
 Run with:  python app.py
-Then open: `http://127.0.0.1:5000
+Then open: http://127.0.0.1:5000
 """
 
 import os
-from datetime import datetime
-
+import secrets
+from datetime import datetime, timezone, timedelta
+from functools import wraps
 from flask import (
     Flask, render_template, request, redirect,
-    url_for, session, flash, send_from_directory
+    url_for, session, flash, send_from_directory, abort
 )
 from flask_sqlalchemy import SQLAlchemy
+from flask_wtf import CSRFProtect
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
@@ -24,31 +26,35 @@ import docx
 # ---------------------------------------------------------------------------
 # App configuration
 # ---------------------------------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+from dotenv import load_dotenv
+load_dotenv()
+
 app = Flask(__name__)
 
-# In a real deployment this would come from an environment variable, not source.
-# For a local POC a fixed string is acceptable, but never commit a real secret.
-app.config["SECRET_KEY"] = "dev-secret-change-me"
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///legal.db"
-app.config["UPLOAD_FOLDER"] = "uploads"
-app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024  # 25 MB cap, matches the UI
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-only-insecure-key-change-me")
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + os.path.join(BASE_DIR, "legal.db")
+app.config["UPLOAD_FOLDER"] = os.path.join(BASE_DIR, "uploads")
+app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
+
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("FORCE_SECURE_COOKIES") == "1"
 
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
-
 database = SQLAlchemy(app)
+csrf = CSRFProtect(app)
 
-# Ensure the upload directory exists on startup
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
 
-# ---------------------------------------------------------------------------
-# Database models
-# ---------------------------------------------------------------------------
 class User(database.Model):
     id = database.Column(database.Integer, primary_key=True)
     full_name = database.Column(database.String(120), nullable=False)
     email = database.Column(database.String(120), unique=True, nullable=False)
     password_hash = database.Column(database.String(255), nullable=False)
+    reset_token = database.Column(database.String(64))
+    reset_token_expiry = database.Column(database.DateTime)
     documents = database.relationship("Document", backref="owner", lazy=True)
 
 
@@ -58,9 +64,10 @@ class Document(database.Model):
     file_name = database.Column(database.String(255), nullable=False)
     stored_name = database.Column(database.String(255), nullable=False)
     file_format = database.Column(database.String(10))
-    upload_date = database.Column(database.DateTime, default=datetime.utcnow)
+    upload_date = database.Column(database.DateTime, default=lambda: datetime.now(timezone.utc))
     summary_text = database.Column(database.Text)
     status = database.Column(database.String(20), default="Processing")
+    error_message = database.Column(database.Text)
     clauses = database.relationship("ExtractedClause", backref="document", lazy=True)
 
 
@@ -69,23 +76,15 @@ class ExtractedClause(database.Model):
     document_id = database.Column(database.Integer, database.ForeignKey("document.id"), nullable=False)
     clause_category = database.Column(database.String(80))
     extracted_text = database.Column(database.Text)
-    risk_severity = database.Column(database.String(20))  # High / Medium / Low / Review
-    explanation = database.Column(database.Text)          # LLM's one-line reason
+    risk_severity = database.Column(database.String(20))
+    explanation = database.Column(database.Text)
 
 
-# ---------------------------------------------------------------------------
-# Helper functions
-# ---------------------------------------------------------------------------
 def is_allowed_file(file_name):
-    """Return True only for extensions we can actually process."""
     return "." in file_name and file_name.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 def extract_text_from_document(file_path, file_format):
-    """
-    Pull raw text out of a PDF, DOCX, or TXT file.
-    Returns a single string of the document's text content.
-    """
     extracted_text = ""
 
     if file_format == "pdf":
@@ -109,7 +108,6 @@ def extract_text_from_document(file_path, file_format):
 
 @app.context_processor
 def inject_user_initials():
-    """Make user_initials available in every template without passing it per route."""
     name = session.get("user_name", "")
     if not name:
         return {"user_initials": "U"}
@@ -121,16 +119,15 @@ def inject_user_initials():
     return {"user_initials": initials.upper()}
 
 
-def login_required_redirect():
-    """Return a redirect to login if no user is in the session, else None."""
-    if "user_id" not in session:
-        return redirect(url_for("login"))
-    return None
+def login_required(view_func):
+    @wraps(view_func)
+    def wrapped(*args, **kwargs):
+        if "user_id" not in session:
+            return redirect(url_for("login"))
+        return view_func(*args, **kwargs)
+    return wrapped
 
 
-# ---------------------------------------------------------------------------
-# Authentication routes
-# ---------------------------------------------------------------------------
 @app.route("/")
 def index():
     return redirect(url_for("dashboard") if "user_id" in session else url_for("login"))
@@ -145,6 +142,7 @@ def login():
         user = User.query.filter_by(email=email).first()
 
         if user and check_password_hash(user.password_hash, password):
+            session.clear()
             session["user_id"] = user.id
             session["user_name"] = user.full_name
             return redirect(url_for("dashboard"))
@@ -162,6 +160,14 @@ def register():
         email = request.form.get("email", "").strip().lower()
         password = request.form.get("password", "")
 
+        if not full_name or not email or not password:
+            flash("All fields are required.")
+            return redirect(url_for("register"))
+
+        if len(password) < 8:
+            flash("Password must be at least 8 characters.")
+            return redirect(url_for("register"))
+
         if User.query.filter_by(email=email).first():
             flash("An account with that email already exists.")
             return redirect(url_for("register"))
@@ -174,6 +180,7 @@ def register():
         database.session.add(new_user)
         database.session.commit()
 
+        session.clear()
         session["user_id"] = new_user.id
         session["user_name"] = new_user.full_name
         return redirect(url_for("dashboard"))
@@ -187,15 +194,9 @@ def logout():
     return redirect(url_for("login"))
 
 
-# ---------------------------------------------------------------------------
-# Application routes
-# ---------------------------------------------------------------------------
 @app.route("/dashboard")
+@login_required
 def dashboard():
-    guard = login_required_redirect()
-    if guard:
-        return guard
-
     user_documents = (
         Document.query.filter_by(user_id=session["user_id"])
         .order_by(Document.upload_date.desc())
@@ -210,15 +211,16 @@ def dashboard():
         .count()
     )
 
-    # Documents uploaded since midnight today
-    start_of_today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    start_of_today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     processed_today = sum(
         1 for document in user_documents
-        if document.upload_date >= start_of_today and document.status == "Processed"
+        if document.upload_date.replace(tzinfo=timezone.utc) >= start_of_today
+        and document.status == "Processed"
     )
-    pending_count = sum(1 for document in user_documents if document.status != "Processed")
+    pending_count = sum(1 for document in user_documents if document.status == "Processing")
+    failed_count = sum(1 for document in user_documents if document.status == "Failed")
 
-    current_user = User.query.get(session["user_id"]) 
+    current_user = database.session.get(User, session["user_id"])
 
     return render_template(
         "dashboard.html",
@@ -229,16 +231,14 @@ def dashboard():
         high_risk_count=high_risk_count,
         processed_today=processed_today,
         pending_count=pending_count,
+        failed_count=failed_count,
         active_view="dashboard",
     )
 
 
 @app.route("/upload", methods=["POST"])
+@login_required
 def upload_document():
-    guard = login_required_redirect()
-    if guard:
-        return guard
-
     uploaded_file = request.files.get("document")
 
     if not uploaded_file or uploaded_file.filename == "":
@@ -249,14 +249,16 @@ def upload_document():
         flash("Unsupported file type. Upload a PDF, DOCX, or TXT file.")
         return redirect(url_for("dashboard"))
 
-    # Save the file with a safe, unique name
     original_name = secure_filename(uploaded_file.filename)
+    if not original_name:
+        flash("Invalid file name.")
+        return redirect(url_for("dashboard"))
+
     file_format = original_name.rsplit(".", 1)[1].lower()
-    stored_name = f"{datetime.utcnow().strftime('%Y%m%d%H%M%S')}_{original_name}"
+    stored_name = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{original_name}"
     file_path = os.path.join(app.config["UPLOAD_FOLDER"], stored_name)
     uploaded_file.save(file_path)
 
-    # Create the database record
     new_document = Document(
         user_id=session["user_id"],
         file_name=original_name,
@@ -267,8 +269,6 @@ def upload_document():
     database.session.add(new_document)
     database.session.commit()
 
-    # Read the four Analyzer dropdown selections from the form.
-    # Defaults match the first <option> in each dropdown.
     analysis_options = {
         "summary_depth": request.form.get("summary_depth", "Executive Summary"),
         "extraction_mode": request.form.get("extraction_mode", "Abstractive & Extractive"),
@@ -276,38 +276,48 @@ def upload_document():
         "jurisdiction": request.form.get("jurisdiction", "General Commercial"),
     }
 
-    # Extract text and run analysis
-    document_text = extract_text_from_document(file_path, file_format)
-    summary, detected_clauses = analyze_legal_text(document_text, analysis_options)
+    try:
+        document_text = extract_text_from_document(file_path, file_format)
 
-    new_document.summary_text = summary
-    new_document.status = "Processed"
+        if not document_text:
+            raise ValueError("No extractable text was found in this file.")
 
-    for clause in detected_clauses:
-        database.session.add(
-            ExtractedClause(
-                document_id=new_document.id,
-                clause_category=clause["category"],
-                extracted_text=clause["text"],
-                risk_severity=clause.get("severity", "Review"),
-                explanation=clause.get("explanation", ""),
+        summary, detected_clauses = analyze_legal_text(document_text, analysis_options)
+
+        new_document.summary_text = summary
+        new_document.status = "Processed"
+
+        for clause in detected_clauses:
+            database.session.add(
+                ExtractedClause(
+                    document_id=new_document.id,
+                    clause_category=clause["category"],
+                    extracted_text=clause["text"],
+                    risk_severity=clause.get("severity", "Review"),
+                    explanation=clause.get("explanation", ""),
+                )
             )
-        )
-    database.session.commit()
+        database.session.commit()
+        flash(f"'{original_name}' processed successfully.")
 
-    flash(f"'{original_name}' processed successfully.")
+    except Exception as exc:
+        database.session.rollback()
+        new_document.status = "Failed"
+        new_document.error_message = str(exc)
+        database.session.add(new_document)
+        database.session.commit()
+        flash(f"'{original_name}' could not be processed: {exc}")
+
     return redirect(url_for("dashboard"))
 
 
 @app.route("/document/<int:document_id>")
+@login_required
 def view_document(document_id):
-    guard = login_required_redirect()
-    if guard:
-        return guard
+    document = database.session.get(Document, document_id)
+    if document is None:
+        abort(404)
 
-    document = Document.query.get_or_404(document_id)
-
-    # Ownership check: users can only see their own documents
     if document.user_id != session["user_id"]:
         flash("You do not have access to that document.")
         return redirect(url_for("dashboard"))
@@ -319,16 +329,163 @@ def view_document(document_id):
     )
 
 
-# ---------------------------------------------------------------------------
-# The analysis layer  (see analysis.py for the real logic)
-# ---------------------------------------------------------------------------
-from analysis import analyze_legal_text  # noqa: E402  (imported here for clarity)
+@app.route("/settings/profile", methods=["POST"])
+@login_required
+def update_profile():
+    full_name = request.form.get("full_name", "").strip()
+
+    if not full_name:
+        flash("Full name cannot be empty.")
+        return redirect(url_for("dashboard") + "#settings")
+
+    user = database.session.get(User, session["user_id"])
+    user.full_name = full_name
+    database.session.commit()
+
+    session["user_name"] = full_name
+
+    flash("Profile updated successfully.")
+    return redirect(url_for("dashboard") + "#settings")
 
 
-# ---------------------------------------------------------------------------
-# Entry point
-# ---------------------------------------------------------------------------
+@app.route("/settings/password", methods=["POST"])
+@login_required
+def change_password():
+    current_password = request.form.get("current_password", "")
+    new_password = request.form.get("new_password", "")
+    confirm_password = request.form.get("confirm_password", "")
+
+    user = database.session.get(User, session["user_id"])
+
+    if not check_password_hash(user.password_hash, current_password):
+        flash("Current password is incorrect.")
+        return redirect(url_for("dashboard") + "#settings")
+
+    if len(new_password) < 8:
+        flash("New password must be at least 8 characters.")
+        return redirect(url_for("dashboard") + "#settings")
+
+    if new_password != confirm_password:
+        flash("New password and confirmation do not match.")
+        return redirect(url_for("dashboard") + "#settings")
+
+    user.password_hash = generate_password_hash(new_password)
+    database.session.commit()
+
+    flash("Password changed successfully.")
+    return redirect(url_for("dashboard") + "#settings")
+
+
+@app.route("/forgot-password", methods=["GET", "POST"])
+def forgot_password():
+    if request.method == "POST":
+        email = request.form.get("email", "").strip().lower()
+        user = User.query.filter_by(email=email).first()
+
+        generic_message = "If an account with that email exists, a reset link has been generated."
+
+        if user:
+            token = secrets.token_urlsafe(32)
+            user.reset_token = token
+            user.reset_token_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+            database.session.commit()
+
+            reset_link = url_for("reset_password", token=token, _external=True)
+
+            print(f"\n[PASSWORD RESET] Link for {email}: {reset_link}\n")
+
+            flash(generic_message)
+            flash(f"[DEV MODE] Reset link: {reset_link}")
+        else:
+            flash(generic_message)
+
+        return redirect(url_for("forgot_password"))
+
+    return render_template("forgot_password.html")
+
+
+@app.route("/reset-password/<token>", methods=["GET", "POST"])
+def reset_password(token):
+    user = User.query.filter_by(reset_token=token).first()
+
+    if not user or not user.reset_token_expiry or user.reset_token_expiry < datetime.now(timezone.utc):
+        flash("This reset link is invalid or has expired.")
+        return redirect(url_for("forgot_password"))
+
+    if request.method == "POST":
+        new_password = request.form.get("new_password", "")
+        confirm_password = request.form.get("confirm_password", "")
+
+        if len(new_password) < 8:
+            flash("Password must be at least 8 characters.")
+            return redirect(url_for("reset_password", token=token))
+
+        if new_password != confirm_password:
+            flash("Passwords do not match.")
+            return redirect(url_for("reset_password", token=token))
+
+        user.password_hash = generate_password_hash(new_password)
+        user.reset_token = None
+        user.reset_token_expiry = None
+        database.session.commit()
+
+        flash("Password reset successfully. Please log in.")
+        return redirect(url_for("login"))
+
+    return render_template("reset_password.html", token=token)
+
+
+@app.route("/document/<int:document_id>/delete", methods=["POST"])
+@login_required
+def delete_document(document_id):
+    document = database.session.get(Document, document_id)
+    if document is None:
+        abort(404)
+
+    if document.user_id != session["user_id"]:
+        flash("You do not have access to that document.")
+        return redirect(url_for("dashboard"))
+
+    file_path = os.path.join(app.config["UPLOAD_FOLDER"], document.stored_name)
+    try:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+    except OSError:
+        pass
+
+    ExtractedClause.query.filter_by(document_id=document.id).delete()
+    database.session.delete(document)
+    database.session.commit()
+
+    flash(f"'{document.file_name}' was deleted.")
+    return redirect(url_for("dashboard") + "#documents")
+
+
+@app.route("/document/<int:document_id>/download")
+@login_required
+def download_document(document_id):
+    document = database.session.get(Document, document_id)
+    if document is None:
+        abort(404)
+
+    if document.user_id != session["user_id"]:
+        flash("You do not have access to that document.")
+        return redirect(url_for("dashboard"))
+
+    return send_from_directory(
+        app.config["UPLOAD_FOLDER"],
+        document.stored_name,
+        as_attachment=True,
+        download_name=document.file_name,
+    )
+
+
+from analysis import analyze_legal_text  # noqa: E402
+
+
 if __name__ == "__main__":
     with app.app_context():
-        database.create_all()   # Creates legal.db and all tables on first run
-    app.run(debug=True)
+        database.create_all()
+
+    debug_mode = os.environ.get("FLASK_DEBUG") == "1"
+    app.run(debug=debug_mode)

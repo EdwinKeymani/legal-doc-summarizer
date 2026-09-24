@@ -2,78 +2,133 @@
 Analysis layer for the Legal Document Summarizer (HYBRID version, Gemini).
 
 Design:
-  - Text extraction, summarization, and clause FINDING run locally (no cost).
+  - Text extraction and clause FINDING run locally (no cost, fast).
+  - Summarization has three tiers:
+      1. Extractive - Fast     -> sumy LexRank (instant, local, no API cost)
+      2. Extractive - Premium  -> sumy LSA (instant, local, different/often
+                                   better sentence selection than LexRank)
+      3. Abstractive - Premium -> Gemini itself writes the summary in its
+                                   own words. Fast because it's a small API
+                                   call, NOT a heavy local model download
+                                   (unlike the old transformers approach).
   - A single Gemini API call per document does the risk REASONING: given the
-    clauses already found locally, it judges severity and explains why in plain
-    English. This is the one job local rule-based logic cannot do well.
+    clauses already found locally, it judges severity and explains why in
+    plain English.
 
-The four Analyzer dropdowns drive real behavior here:
+The Analyzer dropdowns drive real behavior here:
   - summary_depth   -> summary length
-  - extraction_mode -> abstractive (model) vs extractive (local, instant)
+  - extraction_mode -> which summarization tier to use (see above)
   - risk_level      -> filters which clauses are returned
   - jurisdiction    -> passed only as a labeling hint, NOT as a claim of
-                       jurisdiction-specific legal expertise (see note below)
+                       jurisdiction-specific legal expertise
 
 Honest scoping for the writeup:
-  Summarization is genuine local NLP. Clause finding is rule-based. Risk
-  reasoning is a Gemini call. The system does NOT possess jurisdiction-specific
-  legal knowledge; the jurisdiction field is a contextual hint passed to the
-  model, and its output is informational, not legal advice.
+  Extractive summarization is genuine local NLP (sumy). Abstractive summaries
+  and risk reasoning both come from Gemini API calls. Clause finding is
+  rule-based. The system does NOT possess jurisdiction-specific legal
+  knowledge; the jurisdiction field is a contextual hint passed to the model,
+  and its output is informational, not legal advice.
 """
 
 import os
 import re
 import json
 
+
 # ---------------------------------------------------------------------------
-# LOCAL: Summarization
+# LOCAL: Extractive summarization (fast, no model download, no API cost)
 # ---------------------------------------------------------------------------
-_summarizer = None
-
-
-def _get_summarizer():
-    global _summarizer
-    if _summarizer is None:
-        from transformers import pipeline
-        _summarizer = pipeline("summarization", model="sshleifer/distilbart-cnn-12-6")
-    return _summarizer
-
-
-def summarize_abstractive(document_text, summary_depth):
-    """Model-based summary. Length depends on the Summary Depth dropdown."""
-    if not document_text or len(document_text.split()) < 40:
-        return document_text
-
-    max_len = 90 if summary_depth == "Executive Summary" else 180
-    min_len = 25 if summary_depth == "Executive Summary" else 60
-
-    summarizer = _get_summarizer()
-    words = document_text.split()
-    chunk_size = 700
-    chunks = [" ".join(words[i:i + chunk_size]) for i in range(0, len(words), chunk_size)]
-
-    pieces = []
-    for chunk in chunks:
-        result = summarizer(chunk, max_length=max_len, min_length=min_len, do_sample=False)
-        pieces.append(result[0]["summary_text"])
-    return " ".join(pieces)
-
-
-def summarize_extractive(document_text, summary_depth):
-    """
-    Local, instant, no model download. Picks the most important existing
-    sentences. Used when the user selects 'Extractive Only'.
-    Requires: pip install sumy
-    """
-    from sumy.parsers.plaintext import PlaintextParser
-    from sumy.nlp.tokenizers import Tokenizer
-    from sumy.summarizers.lex_rank import LexRankSummarizer
-
+def summarize_extractive_fast(document_text, summary_depth):
+    """LexRank algorithm via sumy. Instant, local, free."""
     sentence_count = 3 if summary_depth == "Executive Summary" else 7
-    parser = PlaintextParser.from_string(document_text, Tokenizer("english"))
-    summarizer = LexRankSummarizer()
-    sentences = summarizer(parser.document, sentence_count)
-    return " ".join(str(s) for s in sentences)
+
+    try:
+        from sumy.parsers.plaintext import PlaintextParser
+        from sumy.nlp.tokenizers import Tokenizer
+        from sumy.summarizers.lex_rank import LexRankSummarizer
+
+        parser = PlaintextParser.from_string(document_text, Tokenizer("english"))
+        summarizer = LexRankSummarizer()
+        sentences = summarizer(parser.document, sentence_count)
+        result = " ".join(str(s) for s in sentences)
+        if result.strip():
+            return result
+    except Exception:
+        pass
+
+    return _fallback_summary(document_text, sentence_count)
+
+
+def summarize_extractive_premium(document_text, summary_depth):
+    """LSA algorithm via sumy. Still instant and local, but uses a different
+    (latent semantic analysis) approach that often picks more representative
+    sentences than LexRank, especially on longer/denser documents."""
+    sentence_count = 3 if summary_depth == "Executive Summary" else 7
+
+    try:
+        from sumy.parsers.plaintext import PlaintextParser
+        from sumy.nlp.tokenizers import Tokenizer
+        from sumy.summarizers.lsa import LsaSummarizer
+
+        parser = PlaintextParser.from_string(document_text, Tokenizer("english"))
+        summarizer = LsaSummarizer()
+        sentences = summarizer(parser.document, sentence_count)
+        result = " ".join(str(s) for s in sentences)
+        if result.strip():
+            return result
+    except Exception:
+        pass
+
+    return _fallback_summary(document_text, sentence_count)
+
+
+def _fallback_summary(document_text, sentence_count):
+    """Simple 'first N sentences' fallback if a sumy algorithm fails on an
+    unusual document structure (rare, but happens on some PDFs)."""
+    simple_sentences = split_into_sentences(document_text)
+    return " ".join(simple_sentences[:sentence_count]) if simple_sentences else document_text[:500]
+
+
+# ---------------------------------------------------------------------------
+# API: Abstractive summarization via Gemini (fast — one small API call,
+# not a heavy local model download like the old transformers approach)
+# ---------------------------------------------------------------------------
+def summarize_abstractive_gemini(document_text, summary_depth):
+    """
+    Asks Gemini to write a real abstractive summary in its own words.
+    Falls back to the fast extractive summary if no API key is set or the
+    call fails, so the app never breaks just because the network is down.
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return summarize_extractive_fast(document_text, summary_depth)
+
+    target_length = "3-4 sentences" if summary_depth == "Executive Summary" else "8-10 sentences"
+
+    trimmed_text = document_text[:15000]
+
+    prompt = (
+        "Summarize the following legal document in your own words, in "
+        f"{target_length}. Focus on the key obligations, parties involved, "
+        "and any notable terms. This is informational only, not legal advice.\n\n"
+        f"Document:\n{trimmed_text}"
+    )
+
+    try:
+        from google import genai
+
+        client = genai.Client()
+        response = client.models.generate_content(
+            model="gemini-3.6-flash",
+            contents=prompt,
+        )
+        result = response.text.strip()
+        if result:
+            return result
+    except Exception:
+        pass
+
+    return summarize_extractive_fast(document_text, summary_depth)
 
 
 # ---------------------------------------------------------------------------
@@ -111,18 +166,13 @@ def find_clauses(document_text):
 
 
 # ---------------------------------------------------------------------------
-# API: Risk reasoning (the ONE external call, via Gemini)
+# API: Risk reasoning (the ONE required external call, via Gemini)
 # ---------------------------------------------------------------------------
 def assess_risk_with_llm(clauses, jurisdiction):
     """
     Send the locally-found clauses to Gemini to assign severity and explain why.
     ONE call per document. Returns clauses enriched with severity + explanation.
-
-    Uses Google Gemini. Get a free API key at https://aistudio.google.com/apikey
-    and set it as the GEMINI_API_KEY environment variable.
-
-    Falls back to a safe default if no API key is set or the call fails, so the
-    app never crashes just because the network is down.
+    Falls back to a safe default if no API key is set or the call fails.
     """
     api_key = os.environ.get("GEMINI_API_KEY")
 
@@ -143,18 +193,37 @@ def assess_risk_with_llm(clauses, jurisdiction):
         "only, assign a risk severity of exactly 'High', 'Medium', or 'Low', "
         "and give a one-sentence plain-English reason.\n\n"
         f"Clauses:\n{clause_list}\n\n"
-        "Respond ONLY with a JSON array, no other text. Each element: "
-        '{"index": <number>, "severity": "<High|Medium|Low>", "reason": "<one sentence>"}'
+        "Return a list where each element is an object with 'index', 'severity', and 'reason'."
     )
 
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.0-flash")
-        response = model.generate_content(prompt)
-        raw = response.text.strip()
-        raw = re.sub(r"^```(?:json)?|```$", "", raw, flags=re.MULTILINE).strip()
-        assessments = json.loads(raw)
+        import time
+        from google import genai
+        from google.genai import types
+
+        client = genai.Client()
+
+        response = None
+        last_error = None
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model="gemini-3.6-flash",
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                    ),
+                )
+                break
+            except Exception as retry_error:
+                last_error = retry_error
+                if attempt == 0:
+                    time.sleep(1)
+
+        if response is None:
+            raise last_error
+
+        assessments = json.loads(response.text)
 
         by_index = {a["index"]: a for a in assessments}
         for i, clause in enumerate(clauses):
@@ -183,17 +252,19 @@ def analyze_legal_text(document_text, options=None):
     if options is None:
         options = {}
     summary_depth = options.get("summary_depth", "Executive Summary")
-    extraction_mode = options.get("extraction_mode", "Abstractive & Extractive")
+    extraction_mode = options.get("extraction_mode", "Extractive - Fast")
     risk_level = options.get("risk_level", "High & Medium Risk")
     jurisdiction = options.get("jurisdiction", "General Commercial")
 
     if not document_text:
         return "No readable text could be extracted from this document.", []
 
-    if extraction_mode == "Extractive Only":
-        summary = summarize_extractive(document_text, summary_depth)
+    if extraction_mode == "Abstractive - Premium (AI)":
+        summary = summarize_abstractive_gemini(document_text, summary_depth)
+    elif extraction_mode == "Extractive - Premium":
+        summary = summarize_extractive_premium(document_text, summary_depth)
     else:
-        summary = summarize_abstractive(document_text, summary_depth)
+        summary = summarize_extractive_fast(document_text, summary_depth)
 
     clauses = find_clauses(document_text)
     clauses = assess_risk_with_llm(clauses, jurisdiction)
@@ -219,7 +290,7 @@ if __name__ == "__main__":
 
     test_options = {
         "summary_depth": "Executive Summary",
-        "extraction_mode": "Extractive Only",
+        "extraction_mode": "Extractive - Fast",
         "risk_level": "High & Medium Risk",
         "jurisdiction": "General Commercial",
     }

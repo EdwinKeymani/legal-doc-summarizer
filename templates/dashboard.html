@@ -82,9 +82,8 @@
     </div>
   </div>
 
-  <!-- Everything the analysis needs is inside ONE form so the dropdowns and
-       the file submit together. -->
-  <form action="{{ url_for('upload_document') }}" method="POST" enctype="multipart/form-data">
+  <form action="{{ url_for('upload_document') }}" method="POST" enctype="multipart/form-data" id="upload-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
 
     <div class="card">
       <div class="card-header">
@@ -92,6 +91,7 @@
           <i class="fa-solid fa-sliders" style="color: var(--primary-green);"></i> Analysis Configuration
         </div>
       </div>
+
       <div class="controls-grid">
         <div class="field-group">
           <label>Summary Depth</label>
@@ -103,8 +103,9 @@
         <div class="field-group">
           <label>Extraction Mode</label>
           <select name="extraction_mode">
-            <option>Abstractive &amp; Extractive</option>
-            <option>Extractive Only</option>
+            <option>Extractive - Fast</option>
+            <option>Extractive - Premium</option>
+            <option>Abstractive - Premium (AI)</option>
           </select>
         </div>
         <div class="field-group">
@@ -179,9 +180,14 @@
               <span class="status-badge status-medium">{{ document.status }}</span>
             {% endif %}
           </td>
-          <td>
+          <td style="display: flex; gap: 12px; align-items: center;">
             <a href="{{ url_for('view_document', document_id=document.id) }}"
                style="color: var(--primary-green); font-weight: 600; text-decoration: none;">View Report</a>
+            <form action="{{ url_for('delete_document', document_id=document.id) }}" method="POST"
+                  class="delete-form" data-filename="{{ document.file_name }}" style="margin: 0;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="button" class="delete-trigger-btn" style="background: none; border: none; color: var(--danger); font-weight: 600; cursor: pointer; padding: 0;">Delete</button>
+            </form>
           </td>
         </tr>
         {% else %}
@@ -199,16 +205,48 @@
     <div class="card-header">
       <div class="card-title"><i class="fa-solid fa-user" style="color: var(--primary-green);"></i> Profile</div>
     </div>
-    <div class="controls-grid" style="grid-template-columns: 1fr 1fr;">
-      <div class="field-group">
-        <label>Full Name</label>
-        <input type="text" value="{{ user_name or '' }}" readonly>
+    <form action="{{ url_for('update_profile') }}" method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="controls-grid" style="grid-template-columns: 1fr 1fr;">
+        <div class="field-group">
+          <label>Full Name</label>
+          <input type="text" name="full_name" value="{{ user_name or '' }}" required>
+        </div>
+        <div class="field-group">
+          <label>Email</label>
+          <input type="text" value="{{ user_email or '' }}" readonly>
+        </div>
       </div>
-      <div class="field-group">
-        <label>Email</label>
-        <input type="text" value="{{ user_email or '' }}" readonly>
-      </div>
+      <button type="submit" class="btn-submit-analysis" style="margin-top: 16px;">
+        <i class="fa-solid fa-floppy-disk"></i> Save Changes
+      </button>
+    </form>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title"><i class="fa-solid fa-lock" style="color: var(--primary-green);"></i> Change Password</div>
     </div>
+    <form action="{{ url_for('change_password') }}" method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="field-group">
+        <label>Current Password</label>
+        <input type="password" name="current_password" required>
+      </div>
+      <div class="controls-grid" style="grid-template-columns: 1fr 1fr;">
+        <div class="field-group">
+          <label>New Password</label>
+          <input type="password" name="new_password" required minlength="8">
+        </div>
+        <div class="field-group">
+          <label>Confirm New Password</label>
+          <input type="password" name="confirm_password" required minlength="8">
+        </div>
+      </div>
+      <button type="submit" class="btn-submit-analysis" style="margin-top: 16px;">
+        <i class="fa-solid fa-key"></i> Update Password
+      </button>
+    </form>
   </div>
 
   <div class="card">
@@ -228,8 +266,13 @@
 
 {% block scripts %}
 <script>
-  // Tab navigation between the views on this page
   document.addEventListener('DOMContentLoaded', () => {
+    const hash = window.location.hash.replace('#', '');
+    if (hash) {
+      const targetNav = document.querySelector(`.nav-item[data-view="${hash}-view"]`);
+      if (targetNav) targetNav.click();
+    }
+
     const navItems = document.querySelectorAll('.nav-list .nav-item');
     const viewContents = document.querySelectorAll('.view-content');
 
@@ -247,7 +290,6 @@
       });
     });
 
-    // Show the chosen filename before submitting
     const fileInput = document.getElementById('file-input');
     if (fileInput) {
       fileInput.addEventListener('change', function () {
@@ -257,6 +299,41 @@
           chipName.textContent = this.files[0].name;
           chip.style.display = 'flex';
         }
+      });
+    }
+
+    const uploadForm = document.getElementById('upload-form');
+    if (uploadForm) {
+      uploadForm.addEventListener('submit', function () {
+        document.getElementById('processing-overlay').style.display = 'flex';
+      });
+    }
+
+    let formToDelete = null;
+    const deleteModal = document.getElementById('delete-modal');
+    const deleteModalText = document.getElementById('delete-modal-text');
+
+    document.querySelectorAll('.delete-trigger-btn').forEach(btn => {
+      btn.addEventListener('click', function () {
+        formToDelete = this.closest('.delete-form');
+        const filename = formToDelete.getAttribute('data-filename');
+        deleteModalText.textContent = `Are you sure you want to delete "${filename}"? This cannot be undone.`;
+        deleteModal.style.display = 'flex';
+      });
+    });
+
+    const deleteCancelBtn = document.getElementById('delete-cancel-btn');
+    if (deleteCancelBtn) {
+      deleteCancelBtn.addEventListener('click', function () {
+        deleteModal.style.display = 'none';
+        formToDelete = null;
+      });
+    }
+
+    const deleteConfirmBtn = document.getElementById('delete-confirm-btn');
+    if (deleteConfirmBtn) {
+      deleteConfirmBtn.addEventListener('click', function () {
+        if (formToDelete) formToDelete.submit();
       });
     }
   });
