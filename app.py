@@ -33,8 +33,8 @@ load_dotenv()
 app = Flask(__name__)
 
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-only-insecure-key-change-me")
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + os.path.join(BASE_DIR, "legal.db")
-app.config["UPLOAD_FOLDER"] = os.path.join(BASE_DIR, "uploads")
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:////tmp/legal.db" if os.environ.get("VERCEL") else "sqlite:///" + os.path.join(BASE_DIR, "legal.db")
+app.config["UPLOAD_FOLDER"] = "/tmp/uploads" if os.environ.get("VERCEL") else os.path.join(BASE_DIR, "uploads")
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
 app.config["SESSION_COOKIE_HTTPONLY"] = True
@@ -481,11 +481,16 @@ def download_document(document_id):
 
 
 from analysis import analyze_legal_text  # noqa: E402
+from analysis import analyze_legal_text  # noqa: E402
+
+
+# Create tables on import so this works whether run locally (python app.py)
+# or imported directly by a serverless platform like Vercel, which never
+# executes the __main__ block below.
+with app.app_context():
+    database.create_all()
 
 
 if __name__ == "__main__":
-    with app.app_context():
-        database.create_all()
-
     debug_mode = os.environ.get("FLASK_DEBUG") == "1"
     app.run(debug=debug_mode)
