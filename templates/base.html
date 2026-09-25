@@ -74,6 +74,11 @@
   </div>
 
   <!-- Sidebar -->
+  <button class="mobile-menu-toggle" id="mobile-menu-toggle" aria-label="Open menu">
+    <i class="fa-solid fa-bars"></i>
+  </button>
+  <div class="mobile-overlay" id="mobile-overlay"></div>
+
   <aside class="sidebar">
     <div>
       <div class="brand-logo">
@@ -124,5 +129,29 @@
   </main>
 
   {% block scripts %}{% endblock %}
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const menuToggle = document.getElementById("mobile-menu-toggle");
+      const overlay = document.getElementById("mobile-overlay");
+      const sidebar = document.querySelector(".sidebar");
+
+      function openMenu() {
+        sidebar.classList.add("mobile-open");
+        overlay.classList.add("active");
+      }
+
+      function closeMenu() {
+        sidebar.classList.remove("mobile-open");
+        overlay.classList.remove("active");
+      }
+
+      if (menuToggle) menuToggle.addEventListener("click", openMenu);
+      if (overlay) overlay.addEventListener("click", closeMenu);
+
+      document.querySelectorAll(".nav-list .nav-item").forEach(item => {
+        item.addEventListener("click", closeMenu);
+      });
+    });
+  </script>
 </body>
 </html>

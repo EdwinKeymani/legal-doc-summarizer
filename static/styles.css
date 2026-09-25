@@ -487,12 +487,50 @@
 
     @media (max-width: 900px) {
       .sidebar {
-        display: none;
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+        z-index: 1000;
+      }
+      .sidebar.mobile-open {
+        transform: translateX(0);
       }
       .main-wrapper {
         margin-left: 0;
+        max-width: 100%;
+        width: 100%;
         padding: 20px;
       }
+      .mobile-menu-toggle {
+        display: flex;
+      }
+      .mobile-overlay {
+        display: none;
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.4);
+        z-index: 999;
+      }
+      .mobile-overlay.active {
+        display: block;
+      }
+    }
+
+    .mobile-menu-toggle {
+      display: none;
+      position: fixed;
+      top: 16px;
+      left: 16px;
+      z-index: 1001;
+      width: 44px;
+      height: 44px;
+      border-radius: 10px;
+      background: var(--card-bg, #fff);
+      border: 1px solid var(--border-color, #e2e8f0);
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
     }
 
     /* --- Additions for backend wiring --- */
