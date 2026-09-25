@@ -33,7 +33,16 @@ load_dotenv()
 app = Flask(__name__)
 
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-only-insecure-key-change-me")
-app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL", "sqlite:///" + os.path.join(BASE_DIR, "legal.db"))
+
+db_url = os.environ.get("DATABASE_URL", "sqlite:///instance/app.db")
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = db_url
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "connect_args": {"connect_timeout": 10}
+}
+
 app.config["UPLOAD_FOLDER"] = "/tmp/uploads" if os.environ.get("VERCEL") else os.path.join(BASE_DIR, "uploads")
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
@@ -494,8 +503,14 @@ from analysis import analyze_legal_text  # noqa: E402
 # Create tables on import so this works whether run locally (python app.py)
 # or imported directly by a serverless platform like Vercel, which never
 # executes the __main__ block below.
-with app.app_context():
-    database.create_all()
+@app.before_request
+def create_tables_on_first_request():
+    if not getattr(app, "_got_first_request", False):
+        try:
+            database.create_all()
+        except Exception as e:
+            app.logger.error(f"Database setup error: {e}")
+        app._got_first_request = True
 
 
 if __name__ == "__main__":
