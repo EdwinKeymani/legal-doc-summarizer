@@ -486,6 +486,9 @@
     }
 
     @media (max-width: 900px) {
+      body {
+        flex-direction: column;
+      }
       .sidebar {
         transform: translateX(-100%);
         transition: transform 0.25s ease;

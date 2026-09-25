@@ -33,7 +33,7 @@ load_dotenv()
 app = Flask(__name__)
 
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-only-insecure-key-change-me")
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:////tmp/legal.db" if os.environ.get("VERCEL") else "sqlite:///" + os.path.join(BASE_DIR, "legal.db")
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL", "sqlite:///" + os.path.join(BASE_DIR, "legal.db"))
 app.config["UPLOAD_FOLDER"] = "/tmp/uploads" if os.environ.get("VERCEL") else os.path.join(BASE_DIR, "uploads")
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
@@ -480,7 +480,14 @@ def download_document(document_id):
     )
 
 
-from analysis import analyze_legal_text  # noqa: E402
+@app.route("/health")
+def health_check():
+    """Simple endpoint to confirm the server is awake and responding.
+    Useful for warming up Render's free tier before a demo, and for
+    Render's own uptime monitoring."""
+    return "OK", 200
+
+
 from analysis import analyze_legal_text  # noqa: E402
 
 
