@@ -103,16 +103,28 @@ def summarize_abstractive_gemini(document_text, summary_depth):
     if not api_key:
         return summarize_extractive_fast(document_text, summary_depth)
 
-    target_length = "3-4 sentences" if summary_depth == "Executive Summary" else "8-10 sentences"
+    trimmed_text = document_text[:30000]
 
-    trimmed_text = document_text[:15000]
+    if summary_depth == "Executive Summary":
+        instructions = (
+            "Provide a concise Executive Summary in 3 to 5 bullet points. "
+            "Focus strictly on the high-level purpose, key parties, primary liability/financial obligation, and bottom-line outcome."
+        )
+    elif summary_depth in ["Detailed Analysis", "Detailed"]:
+        instructions = (
+            "Perform a comprehensive, deep-dive document review. Do NOT give a brief or shallow summary.\n"
+            "Go through the ENTIRE text thoroughly and break down every key section and point using the following structure:\n\n"
+            "1. **Core Overview**: 2 detailed paragraphs explaining the full scope and intent of the agreement.\n"
+            "2. **Key Clauses & Provisions**: Bulleted list detailing major clauses, obligations, representations, and operational requirements.\n"
+            "3. **Financials & Milestones**: List all payment schedules, fee arrangements, effective dates, and renewal terms.\n"
+            "4. **Risks & Termination**: Outline termination conditions, liability caps, indemnities, and governing law."
+        )
+    else:  # Standard / Default
+        instructions = (
+            "Provide a balanced 2-3 paragraph summary covering the document scope, main obligations, key provisions, and governing terms."
+        )
 
-    prompt = (
-        "Summarize the following legal document in your own words, in "
-        f"{target_length}. Focus on the key obligations, parties involved, "
-        "and any notable terms. This is informational only, not legal advice.\n\n"
-        f"Document:\n{trimmed_text}"
-    )
+    prompt = f"{instructions}\n\nDocument Text:\n{trimmed_text}\n\nNote: Informational only, not formal legal advice." 
 
     try:
         from google import genai
