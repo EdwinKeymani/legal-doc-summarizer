@@ -32,13 +32,20 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# Clean and normalize DATABASE_URL from environment
+raw_db_url = os.environ.get("DATABASE_URL", "sqlite:///instance/app.db").strip().strip("'").strip(""")
+if raw_db_url.startswith("postgres://"):
+    raw_db_url = raw_db_url.replace("postgres://", "postgresql://", 1)
+
+app.config["SQLALCHEMY_DATABASE_URI"] = raw_db_url
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "connect_args": {"connect_timeout": 10}
+}
+
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-only-insecure-key-change-me")
 
-db_url = os.environ.get("DATABASE_URL", "sqlite:///instance/app.db")
-if db_url.startswith("postgres://"):
-    db_url = db_url.replace("postgres://", "postgresql://", 1)
 
-app.config["SQLALCHEMY_DATABASE_URI"] = db_url
 app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
     "connect_args": {"connect_timeout": 10}
 }
