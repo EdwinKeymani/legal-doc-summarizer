@@ -549,7 +549,7 @@ with app.app_context():
     database.create_all()
 # Force table creation inside application context
 with app.app_context():
-    db.create_all()
+   database.create_all()
 
 
 if __name__ == "__main__":
