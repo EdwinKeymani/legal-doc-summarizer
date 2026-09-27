@@ -53,6 +53,13 @@ if database_url.startswith("postgres://"):
     database_url = database_url.replace("postgres://", "postgresql://", 1)
 app.config["SQLALCHEMY_DATABASE_URI"] = database_url.replace("postgresql://", "postgresql+psycopg2://", 1) if database_url else database_url
 
+# Fix SSL SYSCALL EOF errors on Render PostgreSQL
+app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
+    "pool_pre_ping": True,       # Checks connection health before running queries; reconnects if dropped
+    "pool_recycle": 280,          # Recycles connections every ~4.5 minutes before Render drops them
+    "pool_timeout": 30,           # Prevents long-hanging connection attempts
+}
+
 # Uploads: use /tmp on Vercel (its only writable location), otherwise a
 # local uploads/ folder next to app.py.
 app.config["UPLOAD_FOLDER"] = "/tmp/uploads" if os.environ.get("VERCEL") else os.path.join(BASE_DIR, "uploads")
@@ -64,14 +71,18 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024  # 25 MB cap, matches the UI
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("FORCE_SECURE_COOKIES") == "1"
-
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
 database = SQLAlchemy(app)
+
+# Clean up database sessions after every request to prevent stale connections
+@app.teardown_appcontext
+def shutdown_session(exception=None):
+    database.session.remove()
+
 csrf = CSRFProtect(app)
 
 # Ensure the upload directory exists on startup
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
-
 
 # ---------------------------------------------------------------------------
 # Database models
@@ -549,8 +560,7 @@ with app.app_context():
     database.create_all()
 # Force table creation inside application context
 with app.app_context():
-   database.create_all()
-
+    database.create_all()
 
 if __name__ == "__main__":
     debug_mode = os.environ.get("FLASK_DEBUG") == "1"
