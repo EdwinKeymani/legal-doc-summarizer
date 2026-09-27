@@ -24,6 +24,12 @@ from werkzeug.utils import secure_filename
 import pdfplumber
 import docx
 
+# Initialize Flask app
+app = Flask(__name__)
+
+# Configure Secret Key
+app.secret_key = os.environ.get("381b3eb7131e4ebe33d8fc4aee0213707252063f601cf61113db0172391fb2c7", secrets.token_hex(16))
+
 # ---------------------------------------------------------------------------
 # App configuration
 # ---------------------------------------------------------------------------
@@ -178,8 +184,10 @@ def login():
 
         user = User.query.filter_by(email=email).first()
 
+        # Update this block here
         if user and check_password_hash(user.password_hash, password):
             session.clear()
+            session.permanent = True  # Added here to persist user sessions
             session["user_id"] = user.id
             session["user_name"] = user.full_name
             return redirect(url_for("dashboard"))
@@ -210,22 +218,27 @@ def register():
             flash("An account with that email already exists.")
             return redirect(url_for("register"))
 
-        new_user = User(
-            full_name=full_name,
-            email=email,
-            password_hash=generate_password_hash(password),
-        )
-        database.session.add(new_user)
-        database.session.commit()
+        try:
+            new_user = User(
+                full_name=full_name,
+                email=email,
+                password_hash=generate_password_hash(password),
+            )
+            database.session.add(new_user)
+            database.session.commit()  # Saves cleanly to PostgreSQL
 
-        session.clear()
-        session["user_id"] = new_user.id
-        session["user_name"] = new_user.full_name
-        return redirect(url_for("dashboard"))
+            session.clear()
+            session["user_id"] = new_user.id
+            session["user_name"] = new_user.full_name
+            return redirect(url_for("dashboard"))
+
+        except Exception as e:
+            database.session.rollback()  # Prevents thread locking or stale transactions
+            flash("An error occurred while creating your account. Please try again.")
+            print(f"Registration DB Error: {e}")  # Logs error directly to Render console
+            return redirect(url_for("register"))
 
     return render_template("register.html")
-
-
 @app.route("/logout")
 def logout():
     session.clear()
@@ -534,6 +547,9 @@ from analysis import analyze_legal_text  # noqa: E402
 # executes the __main__ block below.
 with app.app_context():
     database.create_all()
+# Force table creation inside application context
+with app.app_context():
+    db.create_all()
 
 
 if __name__ == "__main__":
