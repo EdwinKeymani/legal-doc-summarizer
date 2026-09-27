@@ -1,4 +1,4 @@
-cat > app.py << 'PYEOF'
+
 """
 Legal Document Summarizer - Backend POC
 Single-file Flask application.
