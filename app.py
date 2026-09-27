@@ -1,6 +1,7 @@
+cat > app.py << 'PYEOF'
 """
 Legal Document Summarizer - Backend POC
-Single-file Flask application. Local only: SQLite + local file storage.
+Single-file Flask application.
 
 Run with:  python app.py
 Then open: http://127.0.0.1:5000
@@ -32,11 +33,28 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# Pull the secret from the environment; fall back to a clearly-labeled dev
+# value so the app still runs out of the box for local testing. Never rely
+# on the fallback outside of localhost.
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-only-insecure-key-change-me")
-app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get("DATABASE_URL", "sqlite:///" + os.path.join(BASE_DIR, "legal.db"))
-app.config["UPLOAD_FOLDER"] = "/tmp/uploads" if os.environ.get("VERCEL") else os.path.join(BASE_DIR, "uploads")
-app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
+# Database: reads DATABASE_URL when set (e.g. Render's Postgres), otherwise
+# falls back to a local SQLite file for local development. Render (and some
+# other providers) hand out a URL starting with postgres:// but SQLAlchemy
+# 1.4+ requires postgresql://, so normalize it here.
+database_url = os.environ.get("DATABASE_URL", "sqlite:///" + os.path.join(BASE_DIR, "legal.db"))
+if database_url.startswith("postgres://"):
+    database_url = database_url.replace("postgres://", "postgresql://", 1)
+app.config["SQLALCHEMY_DATABASE_URI"] = database_url.replace("postgresql://", "postgresql+psycopg2://", 1) if database_url else database_url
+
+# Uploads: use /tmp on Vercel (its only writable location), otherwise a
+# local uploads/ folder next to app.py.
+app.config["UPLOAD_FOLDER"] = "/tmp/uploads" if os.environ.get("VERCEL") else os.path.join(BASE_DIR, "uploads")
+app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024  # 25 MB cap, matches the UI
+
+# Harden session cookies. SECURE requires HTTPS, so it's disabled for local
+# http://127.0.0.1 testing by default — set FORCE_SECURE_COOKIES=1 once
+# this sits behind TLS.
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("FORCE_SECURE_COOKIES") == "1"
@@ -45,9 +63,13 @@ ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
 database = SQLAlchemy(app)
 csrf = CSRFProtect(app)
 
+# Ensure the upload directory exists on startup
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 
 
+# ---------------------------------------------------------------------------
+# Database models
+# ---------------------------------------------------------------------------
 class User(database.Model):
     id = database.Column(database.Integer, primary_key=True)
     full_name = database.Column(database.String(120), nullable=False)
@@ -80,11 +102,21 @@ class ExtractedClause(database.Model):
     explanation = database.Column(database.Text)
 
 
+# ---------------------------------------------------------------------------
+# Helper functions
+# ---------------------------------------------------------------------------
 def is_allowed_file(file_name):
+    """Return True only for extensions we can actually process."""
     return "." in file_name and file_name.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 def extract_text_from_document(file_path, file_format):
+    """
+    Pull raw text out of a PDF, DOCX, or TXT file.
+    Returns a single string of the document's text content.
+    Raises on malformed/unreadable files so the caller can record a
+    proper failure state instead of silently producing an empty summary.
+    """
     extracted_text = ""
 
     if file_format == "pdf":
@@ -108,6 +140,7 @@ def extract_text_from_document(file_path, file_format):
 
 @app.context_processor
 def inject_user_initials():
+    """Make user_initials available in every template without passing it per route."""
     name = session.get("user_name", "")
     if not name:
         return {"user_initials": "U"}
@@ -120,6 +153,7 @@ def inject_user_initials():
 
 
 def login_required(view_func):
+    """Redirect anonymous visitors to the login page before running a view."""
     @wraps(view_func)
     def wrapped(*args, **kwargs):
         if "user_id" not in session:
@@ -128,6 +162,9 @@ def login_required(view_func):
     return wrapped
 
 
+# ---------------------------------------------------------------------------
+# Authentication routes
+# ---------------------------------------------------------------------------
 @app.route("/")
 def index():
     return redirect(url_for("dashboard") if "user_id" in session else url_for("login"))
@@ -151,6 +188,7 @@ def login():
         return redirect(url_for("login"))
 
     return render_template("login.html")
+
 
 
 @app.route("/register", methods=["GET", "POST"])
@@ -271,7 +309,7 @@ def upload_document():
 
     analysis_options = {
         "summary_depth": request.form.get("summary_depth", "Executive Summary"),
-        "extraction_mode": request.form.get("extraction_mode", "Abstractive & Extractive"),
+         "extraction_mode": request.form.get("extraction_mode", "Abstractive & Extractive"),
         "risk_level": request.form.get("risk_level", "High & Medium Risk"),
         "jurisdiction": request.form.get("jurisdiction", "General Commercial"),
     }
