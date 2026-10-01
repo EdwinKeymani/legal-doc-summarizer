@@ -19,6 +19,7 @@
     }
 
     body {
+      overflow-x: hidden;
       background-color: var(--bg-gray);
       color: var(--text-main);
       display: flex;
@@ -419,6 +420,12 @@
     }
 
     /* Custom Data Tables */
+    .table-scroll-wrapper {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
     .data-table {
       width: 100%;
       border-collapse: collapse;
