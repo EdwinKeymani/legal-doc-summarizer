@@ -25,10 +25,14 @@
       margin: 16px;
       border-radius: 24px;
       background: linear-gradient(135deg, #1a0826 0%, #0d021a 100%);
-      background-image: 
+      background-image: url(Images/justice-bg.jpg.png);
+      background-size: cover;
+      background-position: center;
+    
+      /* background-image: 
         radial-gradient(circle at 80% 20%, rgba(236, 72, 153, 0.4), transparent 45%),
         radial-gradient(circle at 20% 50%, rgba(168, 85, 247, 0.4), transparent 45%),
-        radial-gradient(circle at 60% 80%, rgba(59, 130, 246, 0.4), transparent 45%);
+        radial-gradient(circle at 60% 80%, rgba(59, 130, 246, 0.4), transparent 45%); */
       position: relative;
       display: flex;
       flex-direction: column;
@@ -38,8 +42,13 @@
       overflow: hidden;
     }
 
+    .brand-panel:hover {
+      transform: scale(1.02);
+      transition: transform 0.3s ease-in-out;
+    }
+
     /* Glow effect */
-    .brand-panel::after {
+    /* .brand-panel::after {
       content: '';
       position: absolute;
       top: -10%;
@@ -49,7 +58,7 @@
       background: radial-gradient(ellipse at center, rgba(236, 72, 153, 0.25) 0%, rgba(147, 51, 234, 0.2) 40%, transparent 70%);
       filter: blur(40px);
       pointer-events: none;
-    }
+    } */
 
     .quote-header {
       display: flex;
