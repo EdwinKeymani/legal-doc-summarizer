@@ -3,22 +3,39 @@
 
 {% block content %}
 
-<a href="{{ url_for('dashboard') }}" style="color: var(--primary-green); font-weight: 600; text-decoration: none; font-size: 13px;">
-  <i class="fa-solid fa-arrow-left"></i> Back to Dashboard
+<a href="{{ url_for('dashboard') }}#documents" class="back-link">
+  <i class="fa-solid fa-arrow-left"></i> Back to My Documents
 </a>
 
 <h1 class="page-title" style="margin-top: 16px;">{{ document.file_name }}</h1>
-<p style="color: var(--text-muted); font-size: 13px; margin-bottom: 24px;">
-  {{ document.file_format }} &middot; Uploaded {{ document.upload_date.strftime('%b %d, %Y at %H:%M') }} &middot; {{ document.status }}
+<p class="document-meta">
+  {{ document.file_format }} &middot;
+  Uploaded <time datetime="{{ document.upload_date | iso_utc }}" data-local-format="datetime">{{ document.upload_date.strftime('%b %d, %Y at %H:%M') }} UTC</time>
+  &middot; {{ document.status }}
 </p>
 
-<!-- Summary -->
+{% if document.status == 'Failed' %}
+<div class="flash-message" role="alert">
+  <strong>This document could not be processed.</strong><br>
+  {{ document.error_message or 'An unknown error occurred.' }}
+</div>
+{% endif %}
+
+<!-- Summary (AI output is Markdown; rendered and sanitised server-side) -->
 <div class="card">
   <div class="card-header">
     <div class="card-title"><i class="fa-solid fa-align-left" style="color: var(--primary-green);"></i> Summary</div>
   </div>
-  <div class="summary-prose">{{ document.summary_text }}</div>
+  <div class="summary-prose">
+    {% if document.summary_text %}
+      {{ document.summary_text | render_markdown }}
+    {% else %}
+      <p>No summary is available for this document.</p>
+    {% endif %}
+  </div>
 </div>
+
+{% set clauses_pending_assessment = document.clauses | selectattr('risk_severity', 'equalto', 'Review') | list %}
 
 <!-- Flagged clauses -->
 <div class="card">
@@ -27,7 +44,17 @@
       <i class="fa-solid fa-triangle-exclamation" style="color: var(--danger);"></i>
       Flagged Clauses ({{ document.clauses | length }})
     </div>
+    {% if clauses_pending_assessment %}
+    <form action="{{ url_for('reassess_document', document_id=document.id) }}" method="POST" style="margin: 0;"
+          onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Assessing...';">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn-secondary">
+        <i class="fa-solid fa-rotate-right"></i> Re-run risk assessment ({{ clauses_pending_assessment | length }})
+      </button>
+    </form>
+    {% endif %}
   </div>
+  <div class="table-scroll-wrapper">
   <table class="data-table">
     <thead>
       <tr>
@@ -41,7 +68,7 @@
       {% for clause in document.clauses %}
       <tr>
         <td>{{ clause.clause_category }}</td>
-        <td style="max-width: 320px;">{{ clause.extracted_text }}</td>
+        <td class="wrap-text">{{ clause.extracted_text }}</td>
         <td>
           {% if clause.risk_severity == 'High' %}
             <span class="status-badge status-high">High Risk</span>
@@ -60,6 +87,7 @@
       {% endfor %}
     </tbody>
   </table>
+  </div>
 </div>
 
 {% endblock %}

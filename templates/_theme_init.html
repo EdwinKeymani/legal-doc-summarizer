@@ -1,0 +1,18 @@
+{# Applies the user's saved theme before the page is painted, so there is no
+   white flash on dark mode. Included in the <head> of every page. #}
+<script>
+  (function () {
+    var serverTheme = "{{ current_theme | default('', true) }}";
+    var savedTheme = serverTheme;
+    try {
+      if (serverTheme) {
+        localStorage.setItem("legalai-theme", serverTheme);
+      } else {
+        savedTheme = localStorage.getItem("legalai-theme") || "system";
+      }
+    } catch (storageError) { /* storage blocked: fall back to the device setting */ }
+    if (savedTheme === "light" || savedTheme === "dark") {
+      document.documentElement.setAttribute("data-theme", savedTheme);
+    }
+  })();
+</script>

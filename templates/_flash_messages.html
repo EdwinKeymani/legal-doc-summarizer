@@ -1,0 +1,6 @@
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="flash-message {{ 'success' if category == 'success' else '' }}"
+         role="{{ 'status' if category == 'success' else 'alert' }}">{{ message }}</div>
+  {% endfor %}
+{% endwith %}

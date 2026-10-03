@@ -33,14 +33,137 @@ Honest scoping for the writeup:
 import os
 import re
 import json
+import time
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Gemini access with retry + model fallback
+# ---------------------------------------------------------------------------
+# Models are tried in order. Each model has its own capacity, so when one is
+# overloaded (503) the next one usually answers. Override on Render with e.g.
+#   GEMINI_MODELS=gemini-3.6-flash,gemini-3.5-flash,gemini-3.5-flash-lite
+DEFAULT_GEMINI_MODELS = ["gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
+
+ATTEMPTS_PER_MODEL = 2            # retries on the same model before moving on
+INITIAL_BACKOFF_SECONDS = 1.5     # doubles after each retryable failure
+PER_REQUEST_TIMEOUT_MS = 20000    # a single Gemini HTTP call may take at most 20s
+TOTAL_TIME_BUDGET_SECONDS = 45    # never spend longer than this on one task
+
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+USER_FACING_ASSESSMENT_ERROR = (
+    "Risk assessment is temporarily unavailable because the AI service is busy. "
+    "Use 'Re-run risk assessment' on this report to try again."
+)
+
+
+class GeminiUnavailableError(Exception):
+    """Raised when every configured model failed within the time budget."""
+
+
+def get_configured_models():
+    configured = os.environ.get("GEMINI_MODELS", "")
+    models = [name.strip() for name in configured.split(",") if name.strip()]
+    return models or DEFAULT_GEMINI_MODELS
+
+
+def _create_gemini_client():
+    from google import genai
+    from google.genai import types
+    return genai.Client(http_options=types.HttpOptions(timeout=PER_REQUEST_TIMEOUT_MS))
+
+
+def _error_status_code(error):
+    """google-genai APIError exposes .code; network errors have no code."""
+    status_code = getattr(error, "code", None)
+    return status_code if isinstance(status_code, int) else None
+
+
+def _is_retryable(error):
+    status_code = _error_status_code(error)
+    if status_code is not None:
+        return status_code in RETRYABLE_STATUS_CODES
+    # No HTTP status: timeouts, dropped connections ("Server disconnected").
+    return True
+
+
+def generate_with_fallback(prompt, expect_json=False):
+    """
+    Call Gemini with exponential backoff and model fallback.
+    Returns the response text. Raises GeminiUnavailableError if nothing worked.
+    """
+    from google.genai import types
+
+    client = _create_gemini_client()
+    config = types.GenerateContentConfig(response_mime_type="application/json") if expect_json else None
+    deadline = time.monotonic() + TOTAL_TIME_BUDGET_SECONDS
+    last_error = None
+
+    for model_name in get_configured_models():
+        backoff_seconds = INITIAL_BACKOFF_SECONDS
+        for attempt_number in range(1, ATTEMPTS_PER_MODEL + 1):
+            if time.monotonic() >= deadline:
+                raise GeminiUnavailableError(f"Time budget exhausted. Last error: {last_error}")
+            try:
+                response = client.models.generate_content(
+                    model=model_name, contents=prompt, config=config
+                )
+                response_text = (response.text or "").strip()
+                if response_text:
+                    if model_name != get_configured_models()[0]:
+                        logger.warning("Gemini answered via fallback model %s", model_name)
+                    return response_text
+                last_error = ValueError("Empty response")
+            except Exception as error:  # noqa: BLE001 - SDK raises several types
+                last_error = error
+                logger.warning(
+                    "Gemini call failed (model=%s, attempt=%d): %s",
+                    model_name, attempt_number, error,
+                )
+                if not _is_retryable(error):
+                    break  # e.g. 404 model retired, 400 bad request: next model
+            remaining_seconds = deadline - time.monotonic()
+            if attempt_number < ATTEMPTS_PER_MODEL and remaining_seconds > backoff_seconds:
+                time.sleep(backoff_seconds)
+                backoff_seconds *= 2
+
+    raise GeminiUnavailableError(f"All Gemini models failed. Last error: {last_error}")
 
 
 # ---------------------------------------------------------------------------
 # LOCAL: Extractive summarization (fast, no model download, no API cost)
 # ---------------------------------------------------------------------------
+_nltk_tokenizer_checked = False
+
+
+def ensure_nltk_tokenizer_data():
+    """sumy needs NLTK's sentence tokenizer data. A fresh server (e.g. every
+    Render deploy) does not have it, and without it sumy raises LookupError,
+    which used to send every extractive summary to the 'first N sentences'
+    fallback without anyone noticing. Download it once if missing."""
+    global _nltk_tokenizer_checked
+    if _nltk_tokenizer_checked:
+        return
+    import nltk
+    for resource_path, package_name in [("tokenizers/punkt_tab", "punkt_tab"), ("tokenizers/punkt", "punkt")]:
+        try:
+            nltk.data.find(resource_path)
+        except LookupError:
+            logger.warning("NLTK '%s' data missing, downloading it now", package_name)
+            try:
+                nltk.download(package_name, quiet=True)
+            except Exception as download_error:  # noqa: BLE001
+                logger.error("Could not download NLTK '%s': %s", package_name, download_error)
+    _nltk_tokenizer_checked = True
+
+
 def summarize_extractive_fast(document_text, summary_depth):
     """LexRank algorithm via sumy. Instant, local, free."""
     sentence_count = 3 if summary_depth == "Executive Summary" else 7
+    ensure_nltk_tokenizer_data()
 
     try:
         from sumy.parsers.plaintext import PlaintextParser
@@ -53,8 +176,8 @@ def summarize_extractive_fast(document_text, summary_depth):
         result = " ".join(str(s) for s in sentences)
         if result.strip():
             return result
-    except Exception:
-        pass
+    except Exception as error:  # noqa: BLE001
+        logger.warning("LexRank failed, using first-sentences fallback: %s", error)
 
     return _fallback_summary(document_text, sentence_count)
 
@@ -64,6 +187,7 @@ def summarize_extractive_premium(document_text, summary_depth):
     (latent semantic analysis) approach that often picks more representative
     sentences than LexRank, especially on longer/denser documents."""
     sentence_count = 3 if summary_depth == "Executive Summary" else 7
+    ensure_nltk_tokenizer_data()
 
     try:
         from sumy.parsers.plaintext import PlaintextParser
@@ -76,8 +200,8 @@ def summarize_extractive_premium(document_text, summary_depth):
         result = " ".join(str(s) for s in sentences)
         if result.strip():
             return result
-    except Exception:
-        pass
+    except Exception as error:  # noqa: BLE001
+        logger.warning("LSA failed, using first-sentences fallback: %s", error)
 
     return _fallback_summary(document_text, sentence_count)
 
@@ -110,7 +234,7 @@ def summarize_abstractive_gemini(document_text, summary_depth):
             "Provide a concise Executive Summary in 3 to 5 bullet points. "
             "Focus strictly on the high-level purpose, key parties, primary liability/financial obligation, and bottom-line outcome."
         )
-    elif summary_depth in ["Detailed Analysis", "Detailed"]:
+    elif summary_depth in ["Detailed Clauses", "Detailed Analysis", "Detailed"]:
         instructions = (
             "Perform a comprehensive, deep-dive document review. Do NOT give a brief or shallow summary.\n"
             "Go through the ENTIRE text thoroughly and break down every key section and point using the following structure:\n\n"
@@ -127,20 +251,16 @@ def summarize_abstractive_gemini(document_text, summary_depth):
     prompt = f"{instructions}\n\nDocument Text:\n{trimmed_text}\n\nNote: Informational only, not formal legal advice." 
 
     try:
-        from google import genai
+        return generate_with_fallback(prompt)
+    except Exception as error:  # noqa: BLE001
+        logger.error("Abstractive summary failed, using extractive fallback: %s", error)
 
-        client = genai.Client()
-        response = client.models.generate_content(
-            model="gemini-3.6-flash",
-            contents=prompt,
-        )
-        result = response.text.strip()
-        if result:
-            return result
-    except Exception:
-        pass
-
-    return summarize_extractive_fast(document_text, summary_depth)
+    # Be explicit that the user is NOT looking at an AI-written summary.
+    fallback_summary = summarize_extractive_fast(document_text, summary_depth)
+    return (
+        "[Note: the AI summary service was busy, so this is a key-sentence "
+        "(extractive) summary instead.]\n\n" + fallback_summary
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -209,44 +329,30 @@ def assess_risk_with_llm(clauses, jurisdiction):
     )
 
     try:
-        import time
-        from google import genai
-        from google.genai import types
+        response_text = generate_with_fallback(prompt, expect_json=True)
+        assessments = json.loads(response_text)
+        if isinstance(assessments, dict):
+            # Some models wrap the list, e.g. {"assessments": [...]}
+            assessments = next((value for value in assessments.values() if isinstance(value, list)), [])
 
-        client = genai.Client()
+        allowed_severities = {"High", "Medium", "Low"}
+        assessments_by_index = {
+            int(item["index"]): item for item in assessments
+            if isinstance(item, dict) and str(item.get("index", "")).isdigit()
+        }
+        for clause_position, clause in enumerate(clauses, start=1):
+            assessment = assessments_by_index.get(clause_position, {})
+            severity = str(assessment.get("severity", "")).strip().capitalize()
+            clause["severity"] = severity if severity in allowed_severities else "Review"
+            clause["explanation"] = assessment.get("reason") or USER_FACING_ASSESSMENT_ERROR
 
-        response = None
-        last_error = None
-        for attempt in range(2):
-            try:
-                response = client.models.generate_content(
-                    model="gemini-3.6-flash",
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                    ),
-                )
-                break
-            except Exception as retry_error:
-                last_error = retry_error
-                if attempt == 0:
-                    time.sleep(1)
-
-        if response is None:
-            raise last_error
-
-        assessments = json.loads(response.text)
-
-        by_index = {a["index"]: a for a in assessments}
-        for i, clause in enumerate(clauses):
-            assessment = by_index.get(i + 1, {})
-            clause["severity"] = assessment.get("severity", "Review")
-            clause["explanation"] = assessment.get("reason", "No assessment returned.")
-
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001
+        # Full technical detail goes to the server log (visible in Render's
+        # Logs tab); the user gets a plain-language message instead.
+        logger.error("Risk assessment failed: %s", error)
         for clause in clauses:
             clause["severity"] = "Review"
-            clause["explanation"] = f"Risk assessment could not be completed: {error}"
+            clause["explanation"] = USER_FACING_ASSESSMENT_ERROR
 
     return clauses
 

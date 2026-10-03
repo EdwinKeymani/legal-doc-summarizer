@@ -295,3 +295,37 @@
   font-size: 13px;
   margin-bottom: 20px;
 }
+
+.flash-message.success { background-color: #f0fdf4; color: #15803d; border-color: #bbf7d0; }
+
+
+/* ---------- Dark theme (matches the app's Light / Dark / System setting) ---------- */
+:root[data-theme="dark"] { color-scheme: dark; }
+:root[data-theme="dark"] .form-panel, :root[data-theme="dark"] .container, :root[data-theme="dark"], :root[data-theme="dark"] body { background-color: #0b1120; }
+:root[data-theme="dark"] .form-header h2, :root[data-theme="dark"] .signup-text a { color: #e5e7eb; }
+:root[data-theme="dark"] .form-header p, :root[data-theme="dark"] .signup-text { color: #94a3b8; }
+:root[data-theme="dark"] .form-group label, :root[data-theme="dark"] .remember-me, :root[data-theme="dark"] .forgot-link { color: #cbd5e1; }
+:root[data-theme="dark"] .form-group input { background-color: #111827; border-color: #263244; color: #e5e7eb; }
+:root[data-theme="dark"] .form-group input::placeholder { color: #64748b; }
+:root[data-theme="dark"] .form-group input:focus { background-color: #0f172a; border-color: #22c55e; box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.3); }
+:root[data-theme="dark"] .btn-submit { background-color: #e5e7eb; color: #0b1120; }
+:root[data-theme="dark"] .btn-submit:hover { background-color: #ffffff; }
+:root[data-theme="dark"] .remember-me input { accent-color: #22c55e; }
+:root[data-theme="dark"] .flash-message { background-color: rgba(248, 113, 113, 0.12); color: #fca5a5; border-color: rgba(248, 113, 113, 0.35); }
+:root[data-theme="dark"] .flash-message.success { background-color: rgba(34, 197, 94, 0.12); color: #4ade80; border-color: rgba(34, 197, 94, 0.35); }
+
+@media (prefers-color-scheme: dark) {
+:root:not([data-theme="light"]) { color-scheme: dark; }
+:root:not([data-theme="light"]) .form-panel, :root:not([data-theme="light"]) .container, :root:not([data-theme="light"]), :root:not([data-theme="light"]) body { background-color: #0b1120; }
+:root:not([data-theme="light"]) .form-header h2, :root:not([data-theme="light"]) .signup-text a { color: #e5e7eb; }
+:root:not([data-theme="light"]) .form-header p, :root:not([data-theme="light"]) .signup-text { color: #94a3b8; }
+:root:not([data-theme="light"]) .form-group label, :root:not([data-theme="light"]) .remember-me, :root:not([data-theme="light"]) .forgot-link { color: #cbd5e1; }
+:root:not([data-theme="light"]) .form-group input { background-color: #111827; border-color: #263244; color: #e5e7eb; }
+:root:not([data-theme="light"]) .form-group input::placeholder { color: #64748b; }
+:root:not([data-theme="light"]) .form-group input:focus { background-color: #0f172a; border-color: #22c55e; box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.3); }
+:root:not([data-theme="light"]) .btn-submit { background-color: #e5e7eb; color: #0b1120; }
+:root:not([data-theme="light"]) .btn-submit:hover { background-color: #ffffff; }
+:root:not([data-theme="light"]) .remember-me input { accent-color: #22c55e; }
+:root:not([data-theme="light"]) .flash-message { background-color: rgba(248, 113, 113, 0.12); color: #fca5a5; border-color: rgba(248, 113, 113, 0.35); }
+:root:not([data-theme="light"]) .flash-message.success { background-color: rgba(34, 197, 94, 0.12); color: #4ade80; border-color: rgba(34, 197, 94, 0.35); }
+}

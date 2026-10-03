@@ -13,9 +13,12 @@ from datetime import datetime, timezone, timedelta
 from functools import wraps
 from flask import (
     Flask, render_template, request, redirect,
-    url_for, session, flash, send_from_directory, abort
+    url_for, session, flash, send_from_directory, abort, jsonify
 )
 from flask_sqlalchemy import SQLAlchemy
+from markupsafe import Markup
+import markdown as markdown_renderer
+import nh3
 from flask_wtf import CSRFProtect
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
@@ -24,20 +27,41 @@ from werkzeug.utils import secure_filename
 import pdfplumber
 import docx
 
-# Initialize Flask app
-app = Flask(__name__)
-
-# Configure Secret Key
-app.secret_key = os.environ.get("381b3eb7131e4ebe33d8fc4aee0213707252063f601cf61113db0172391fb2c7", secrets.token_hex(16))
+from dotenv import load_dotenv
 
 # ---------------------------------------------------------------------------
 # App configuration
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-from dotenv import load_dotenv
 load_dotenv()
 
 app = Flask(__name__)
+
+# Minutes after which a document still marked "Processing" is treated as
+# interrupted (worker restart, timeout, closed tab) and marked Failed.
+STALE_PROCESSING_MINUTES = 10
+
+# Only show password-reset links on screen during local development.
+# On Render this stays off, so the link is only written to the server log.
+SHOW_RESET_LINK_ON_SCREEN = os.environ.get("SHOW_RESET_LINK") == "1"
+
+# Single source of truth for every choice the UI offers. Templates build their
+# dropdowns from these lists, and submitted values are checked against them.
+THEME_OPTIONS = ["system", "light", "dark"]
+SUMMARY_DEPTH_OPTIONS = ["Executive Summary", "Detailed Clauses"]
+EXTRACTION_MODE_OPTIONS = ["Extractive - Fast", "Extractive - Premium", "Abstractive - Premium (AI)"]
+RISK_LEVEL_OPTIONS = ["High & Medium Risk", "High Risk Only"]
+CONTEXT_HINT_OPTIONS = ["General Commercial", "Employment", "Property / Lease"]
+
+MAX_UPLOAD_MEGABYTES = 25
+
+# HTML tags allowed in rendered AI summaries. Anything else (scripts, iframes,
+# event handlers) is stripped, because the summary text comes from an AI model
+# that was fed user-uploaded content.
+ALLOWED_SUMMARY_TAGS = {
+    "p", "br", "strong", "em", "b", "i", "ul", "ol", "li",
+    "h1", "h2", "h3", "h4", "blockquote", "code", "hr",
+}
 
 # Pull the secret from the environment; fall back to a clearly-labeled dev
 # value so the app still runs out of the box for local testing. Never rely
@@ -63,7 +87,7 @@ app.config["SQLALCHEMY_ENGINE_OPTIONS"] = {
 # Uploads: use /tmp on Vercel (its only writable location), otherwise a
 # local uploads/ folder next to app.py.
 app.config["UPLOAD_FOLDER"] = "/tmp/uploads" if os.environ.get("VERCEL") else os.path.join(BASE_DIR, "uploads")
-app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024  # 25 MB cap, matches the UI
+app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MEGABYTES * 1024 * 1024  # matches the UI
 
 # Harden session cookies. SECURE requires HTTPS, so it's disabled for local
 # http://127.0.0.1 testing by default — set FORCE_SECURE_COOKIES=1 once
@@ -119,6 +143,19 @@ class ExtractedClause(database.Model):
     explanation = database.Column(database.Text)
 
 
+class UserPreference(database.Model):
+    """Per-user settings. Kept in its own table (one row per user) so adding it
+    needs no migration: database.create_all() creates new tables on startup,
+    on both local SQLite and Render Postgres, without touching existing ones."""
+    id = database.Column(database.Integer, primary_key=True)
+    user_id = database.Column(database.Integer, database.ForeignKey("user.id"), unique=True, nullable=False)
+    theme = database.Column(database.String(10), nullable=False, default="system")
+    default_summary_depth = database.Column(database.String(40), nullable=False, default=SUMMARY_DEPTH_OPTIONS[0])
+    default_extraction_mode = database.Column(database.String(40), nullable=False, default=EXTRACTION_MODE_OPTIONS[0])
+    default_risk_level = database.Column(database.String(40), nullable=False, default=RISK_LEVEL_OPTIONS[0])
+    default_context_hint = database.Column(database.String(40), nullable=False, default=CONTEXT_HINT_OPTIONS[0])
+
+
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
@@ -156,6 +193,13 @@ def extract_text_from_document(file_path, file_format):
 
 
 @app.context_processor
+def inject_theme():
+    """Logged-in pages get the saved theme from the session. Logged-out pages
+    get an empty value, and the browser falls back to the last theme it saw."""
+    return {"current_theme": session.get("theme", "system") if "user_id" in session else ""}
+
+
+@app.context_processor
 def inject_user_initials():
     """Make user_initials available in every template without passing it per route."""
     name = session.get("user_name", "")
@@ -167,6 +211,79 @@ def inject_user_initials():
     else:
         initials = name[:2]
     return {"user_initials": initials.upper()}
+
+
+def pick_option(submitted_value, allowed_options, fallback=None):
+    """Return the submitted value only if it is one the UI actually offers."""
+    if submitted_value in allowed_options:
+        return submitted_value
+    return fallback if fallback is not None else allowed_options[0]
+
+
+def get_user_preferences(user_id, create_if_missing=False):
+    """Return the user's saved preferences, or an unsaved object holding the
+    defaults. Only writes a row when create_if_missing=True (on save)."""
+    preferences = UserPreference.query.filter_by(user_id=user_id).first()
+    if preferences is None:
+        preferences = UserPreference(
+            user_id=user_id,
+            theme="system",
+            default_summary_depth=SUMMARY_DEPTH_OPTIONS[0],
+            default_extraction_mode=EXTRACTION_MODE_OPTIONS[0],
+            default_risk_level=RISK_LEVEL_OPTIONS[0],
+            default_context_hint=CONTEXT_HINT_OPTIONS[0],
+        )
+        if create_if_missing:
+            database.session.add(preferences)
+    return preferences
+
+
+@app.template_filter("render_markdown")
+def render_markdown_filter(markdown_text):
+    """Turn the AI's Markdown (**bold**, bullet lists, headings) into HTML,
+    then strip anything that is not on the safe-tag list."""
+    if not markdown_text:
+        return ""
+    unsafe_html = markdown_renderer.markdown(markdown_text, extensions=["sane_lists"])
+    safe_html = nh3.clean(unsafe_html, tags=ALLOWED_SUMMARY_TAGS, attributes={})
+    return Markup(safe_html)
+
+
+@app.template_filter("iso_utc")
+def iso_utc_filter(datetime_value):
+    """ISO-8601 timestamp with an explicit UTC marker, for <time datetime=...>.
+    The browser converts it to the viewer's local time."""
+    if datetime_value is None:
+        return ""
+    return as_utc(datetime_value).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def as_utc(datetime_value):
+    """Database drivers return naive datetimes; treat them as UTC so they can
+    be compared with timezone-aware values without raising TypeError."""
+    if datetime_value is None:
+        return None
+    if datetime_value.tzinfo is None:
+        return datetime_value.replace(tzinfo=timezone.utc)
+    return datetime_value
+
+
+def mark_stale_documents_failed(user_id):
+    """A document stays 'Processing' forever if the request that was analysing
+    it died mid-way. Flip those to Failed so the dashboard counts stay honest
+    and the user can see what happened."""
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=STALE_PROCESSING_MINUTES)
+    stale_documents = Document.query.filter_by(user_id=user_id, status="Processing").all()
+    changed = False
+    for stale_document in stale_documents:
+        if as_utc(stale_document.upload_date) < cutoff:
+            stale_document.status = "Failed"
+            stale_document.error_message = (
+                "Processing was interrupted before it finished. Please upload the document again."
+            )
+            changed = True
+    if changed:
+        database.session.commit()
 
 
 def login_required(view_func):
@@ -201,6 +318,7 @@ def login():
             session.permanent = True  # Added here to persist user sessions
             session["user_id"] = user.id
             session["user_name"] = user.full_name
+            session["theme"] = get_user_preferences(user.id).theme
             return redirect(url_for("dashboard"))
 
         flash("Invalid email or password.")
@@ -239,8 +357,10 @@ def register():
             database.session.commit()  # Saves cleanly to PostgreSQL
 
             session.clear()
+            session.permanent = True
             session["user_id"] = new_user.id
             session["user_name"] = new_user.full_name
+            session["theme"] = "system"
             return redirect(url_for("dashboard"))
 
         except Exception as e:
@@ -259,6 +379,8 @@ def logout():
 @app.route("/dashboard")
 @login_required
 def dashboard():
+    mark_stale_documents_failed(session["user_id"])
+
     user_documents = (
         Document.query.filter_by(user_id=session["user_id"])
         .order_by(Document.upload_date.desc())
@@ -276,7 +398,7 @@ def dashboard():
     start_of_today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     processed_today = sum(
         1 for document in user_documents
-        if document.upload_date.replace(tzinfo=timezone.utc) >= start_of_today
+        if as_utc(document.upload_date) >= start_of_today
         and document.status == "Processed"
     )
     pending_count = sum(1 for document in user_documents if document.status == "Processing")
@@ -295,6 +417,13 @@ def dashboard():
         pending_count=pending_count,
         failed_count=failed_count,
         active_view="dashboard",
+        preferences=get_user_preferences(session["user_id"]),
+        theme_options=THEME_OPTIONS,
+        summary_depth_options=SUMMARY_DEPTH_OPTIONS,
+        extraction_mode_options=EXTRACTION_MODE_OPTIONS,
+        risk_level_options=RISK_LEVEL_OPTIONS,
+        context_hint_options=CONTEXT_HINT_OPTIONS,
+        max_upload_megabytes=MAX_UPLOAD_MEGABYTES,
     )
 
 
@@ -331,11 +460,13 @@ def upload_document():
     database.session.add(new_document)
     database.session.commit()
 
+    # Unknown values (tampered form, stale browser tab) fall back to defaults
+    # instead of being passed straight into the AI prompt.
     analysis_options = {
-        "summary_depth": request.form.get("summary_depth", "Executive Summary"),
-         "extraction_mode": request.form.get("extraction_mode", "Abstractive & Extractive"),
-        "risk_level": request.form.get("risk_level", "High & Medium Risk"),
-        "jurisdiction": request.form.get("jurisdiction", "General Commercial"),
+        "summary_depth": pick_option(request.form.get("summary_depth"), SUMMARY_DEPTH_OPTIONS),
+        "extraction_mode": pick_option(request.form.get("extraction_mode"), EXTRACTION_MODE_OPTIONS),
+        "risk_level": pick_option(request.form.get("risk_level"), RISK_LEVEL_OPTIONS),
+        "jurisdiction": pick_option(request.form.get("jurisdiction"), CONTEXT_HINT_OPTIONS),
     }
 
     try:
@@ -360,7 +491,16 @@ def upload_document():
                 )
             )
         database.session.commit()
-        flash(f"'{original_name}' processed successfully.")
+        assessment_failed = any(
+            clause.get("severity") == "Review" for clause in detected_clauses
+        )
+        if assessment_failed:
+            flash(
+                f"'{original_name}' was summarized, but the AI risk assessment is temporarily "
+                "unavailable. Open the report and use 'Re-run risk assessment' in a moment."
+            )
+        else:
+            flash(f"'{original_name}' processed successfully.", "success")
 
     except Exception as exc:
         database.session.rollback()
@@ -388,6 +528,7 @@ def view_document(document_id):
         "document_detail.html",
         document=document,
         user_name=session.get("user_name"),
+        active_view="documents",
     )
 
 
@@ -406,7 +547,7 @@ def update_profile():
 
     session["user_name"] = full_name
 
-    flash("Profile updated successfully.")
+    flash("Profile updated successfully.", "success")
     return redirect(url_for("dashboard") + "#settings")
 
 
@@ -434,8 +575,54 @@ def change_password():
     user.password_hash = generate_password_hash(new_password)
     database.session.commit()
 
-    flash("Password changed successfully.")
+    flash("Password changed successfully.", "success")
     return redirect(url_for("dashboard") + "#settings")
+
+
+@app.route("/settings/preferences", methods=["POST"])
+@login_required
+def update_preferences():
+    """Save appearance and default analysis options from the Settings tab."""
+    preferences = get_user_preferences(session["user_id"], create_if_missing=True)
+    preferences.theme = pick_option(request.form.get("theme"), THEME_OPTIONS, preferences.theme)
+    preferences.default_summary_depth = pick_option(
+        request.form.get("default_summary_depth"), SUMMARY_DEPTH_OPTIONS, preferences.default_summary_depth)
+    preferences.default_extraction_mode = pick_option(
+        request.form.get("default_extraction_mode"), EXTRACTION_MODE_OPTIONS, preferences.default_extraction_mode)
+    preferences.default_risk_level = pick_option(
+        request.form.get("default_risk_level"), RISK_LEVEL_OPTIONS, preferences.default_risk_level)
+    preferences.default_context_hint = pick_option(
+        request.form.get("default_context_hint"), CONTEXT_HINT_OPTIONS, preferences.default_context_hint)
+    database.session.commit()
+
+    session["theme"] = preferences.theme
+    flash("Preferences saved.", "success")
+    return redirect(url_for("dashboard") + "#settings")
+
+
+@app.route("/settings/theme", methods=["POST"])
+@login_required
+def update_theme():
+    """Used by the sun/moon button in the sidebar. Called with fetch(), so it
+    returns JSON instead of redirecting. CSRF token arrives in X-CSRFToken."""
+    request_data = request.get_json(silent=True) or {}
+    requested_theme = request_data.get("theme")
+    if requested_theme not in THEME_OPTIONS:
+        return jsonify({"error": "Unknown theme"}), 400
+
+    preferences = get_user_preferences(session["user_id"], create_if_missing=True)
+    preferences.theme = requested_theme
+    database.session.commit()
+    session["theme"] = requested_theme
+    return jsonify({"theme": requested_theme})
+
+
+@app.errorhandler(413)
+def upload_too_large(error):
+    """Flask's default for an oversized upload is a bare error page. Send the
+    user back to the Analyzer with a readable message instead."""
+    flash(f"That file is larger than {MAX_UPLOAD_MEGABYTES} MB. Please upload a smaller file.")
+    return redirect(url_for("dashboard") + "#analyzer")
 
 
 @app.route("/forgot-password", methods=["GET", "POST"])
@@ -454,10 +641,14 @@ def forgot_password():
 
             reset_link = url_for("reset_password", token=token, _external=True)
 
-            print(f"\n[PASSWORD RESET] Link for {email}: {reset_link}\n")
+            # Without an email service the link goes to the server log only.
+            # Showing it on screen would let anyone reset anyone's password,
+            # so that is restricted to local development (SHOW_RESET_LINK=1).
+            print(f"\n[PASSWORD RESET] Link for {email}: {reset_link}\n", flush=True)
 
             flash(generic_message)
-            flash(f"[DEV MODE] Reset link: {reset_link}")
+            if SHOW_RESET_LINK_ON_SCREEN:
+                flash(f"[DEV MODE] Reset link: {reset_link}")
         else:
             flash(generic_message)
 
@@ -470,7 +661,7 @@ def forgot_password():
 def reset_password(token):
     user = User.query.filter_by(reset_token=token).first()
 
-    if not user or not user.reset_token_expiry or user.reset_token_expiry < datetime.now(timezone.utc):
+    if not user or not user.reset_token_expiry or as_utc(user.reset_token_expiry) < datetime.now(timezone.utc):
         flash("This reset link is invalid or has expired.")
         return redirect(url_for("forgot_password"))
 
@@ -491,7 +682,7 @@ def reset_password(token):
         user.reset_token_expiry = None
         database.session.commit()
 
-        flash("Password reset successfully. Please log in.")
+        flash("Password reset successfully. Please log in.", "success")
         return redirect(url_for("login"))
 
     return render_template("reset_password.html", token=token)
@@ -519,7 +710,7 @@ def delete_document(document_id):
     database.session.delete(document)
     database.session.commit()
 
-    flash(f"'{document.file_name}' was deleted.")
+    flash(f"'{document.file_name}' was deleted.", "success")
     return redirect(url_for("dashboard") + "#documents")
 
 
@@ -542,6 +733,45 @@ def download_document(document_id):
     )
 
 
+@app.route("/document/<int:document_id>/reassess", methods=["POST"])
+@login_required
+def reassess_document(document_id):
+    """Re-run only the Gemini risk assessment for clauses that came back as
+    'Review' (API busy, timeout, no key at the time). The summary and the
+    clauses themselves are kept; no re-upload needed."""
+    document = database.session.get(Document, document_id)
+    if document is None:
+        abort(404)
+    if document.user_id != session["user_id"]:
+        flash("You do not have access to that document.")
+        return redirect(url_for("dashboard"))
+
+    pending_clauses = [clause for clause in document.clauses if clause.risk_severity == "Review"]
+    if not pending_clauses:
+        flash("All clauses already have a risk assessment.", "success")
+        return redirect(url_for("view_document", document_id=document.id))
+
+    clause_payload = [
+        {"category": clause.clause_category, "text": clause.extracted_text}
+        for clause in pending_clauses
+    ]
+    assessed_payload = assess_risk_with_llm(clause_payload, "General Commercial")
+
+    newly_assessed_count = 0
+    for clause, assessed in zip(pending_clauses, assessed_payload):
+        clause.risk_severity = assessed.get("severity", "Review")
+        clause.explanation = assessed.get("explanation", "")
+        if clause.risk_severity != "Review":
+            newly_assessed_count += 1
+    database.session.commit()
+
+    if newly_assessed_count == len(pending_clauses):
+        flash("Risk assessment completed.", "success")
+    else:
+        flash("The AI service is still busy. Please try again in a minute.")
+    return redirect(url_for("view_document", document_id=document.id))
+
+
 @app.route("/health")
 def health_check():
     """Simple endpoint to confirm the server is awake and responding.
@@ -550,15 +780,10 @@ def health_check():
     return "OK", 200
 
 
-from analysis import analyze_legal_text  # noqa: E402
+from analysis import analyze_legal_text, assess_risk_with_llm  # noqa: E402
 
 
-# Create tables on import so this works whether run locally (python app.py)
-# or imported directly by a serverless platform like Vercel, which never
-# executes the __main__ block below.
-with app.app_context():
-    database.create_all()
-# Force table creation inside application context
+# Create any missing tables on startup (does not alter existing tables).
 with app.app_context():
     database.create_all()
 
