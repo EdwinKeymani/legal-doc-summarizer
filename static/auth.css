@@ -42,10 +42,10 @@
       overflow: hidden;
     }
 
-    .brand-panel:hover {
+    /* .brand-panel:hover {
       transform: scale(1.02);
       transition: transform 0.3s ease-in-out;
-    }
+    } */
 
     /* Glow effect */
     /* .brand-panel::after {
