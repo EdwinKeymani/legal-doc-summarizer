@@ -12,6 +12,10 @@
   {{ document.file_format }} &middot;
   Uploaded <time datetime="{{ document.upload_date | iso_utc }}" data-local-format="datetime">{{ document.upload_date.strftime('%b %d, %Y at %H:%M') }} UTC</time>
   &middot; {{ document.status }}
+  {% if document.analysis and document.analysis.processing_seconds is not none %}
+    &middot; Processed in {{ '%.1f' | format(document.analysis.processing_seconds) }}s
+    {% if document.analysis.processing_seconds > performance_target_seconds %}(over the {{ performance_target_seconds }}s target){% endif %}
+  {% endif %}
 </p>
 
 {% if document.status == 'Failed' %}
@@ -25,7 +29,16 @@
 <div class="card">
   <div class="card-header">
     <div class="card-title"><i class="fa-solid fa-align-left" style="color: var(--primary-green);"></i> Summary</div>
+    {% if document.analysis and document.analysis.summary_method %}
+      <span class="method-badge" title="How this summary was actually produced">{{ document.analysis.summary_method }}</span>
+    {% endif %}
   </div>
+  {% if document.analysis and document.analysis.truncated_for_ai %}
+  <p class="inline-notice">
+    This document is long ({{ '{:,}'.format(document.analysis.extracted_character_count) }} characters). The AI summary
+    covers only the first ~30,000 characters. For full coverage, re-upload it with an Extractive mode.
+  </p>
+  {% endif %}
   <div class="summary-prose">
     {% if document.summary_text %}
       {{ document.summary_text | render_markdown }}
@@ -36,14 +49,22 @@
 </div>
 
 {% set clauses_pending_assessment = document.clauses | selectattr('risk_severity', 'equalto', 'Review') | list %}
+{% set visible_clause_count = document.clauses | length - hidden_clause_count %}
 
 <!-- Flagged clauses -->
 <div class="card">
   <div class="card-header">
     <div class="card-title">
       <i class="fa-solid fa-triangle-exclamation" style="color: var(--danger);"></i>
-      Flagged Clauses ({{ document.clauses | length }})
+      Flagged Clauses
+      {% if hidden_clause_count %}({{ visible_clause_count }} of {{ document.clauses | length }}){% else %}({{ document.clauses | length }}){% endif %}
     </div>
+    {% if hidden_clause_count %}
+    <button type="button" class="btn-secondary" id="toggle-hidden-clauses" aria-pressed="false"
+            data-show-label="Show all {{ document.clauses | length }} clauses" data-hide-label="Show only '{{ chosen_risk_level }}'">
+      Show all {{ document.clauses | length }} clauses
+    </button>
+    {% endif %}
     {% if clauses_pending_assessment %}
     <form action="{{ url_for('reassess_document', document_id=document.id) }}" method="POST" style="margin: 0;"
           onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Assessing...';">
@@ -54,8 +75,14 @@
     </form>
     {% endif %}
   </div>
+  {% if hidden_clause_count %}
+  <p class="card-description" style="margin-top: 0;">
+    Showing '{{ chosen_risk_level }}' as chosen at upload. {{ hidden_clause_count }} lower-risk
+    clause{{ '' if hidden_clause_count == 1 else 's' }} hidden, not deleted.
+  </p>
+  {% endif %}
   <div class="table-scroll-wrapper">
-  <table class="data-table">
+  <table class="data-table" id="clauses-table">
     <thead>
       <tr>
         <th>Category</th>
@@ -66,7 +93,7 @@
     </thead>
     <tbody>
       {% for clause in document.clauses %}
-      <tr>
+      <tr class="{{ '' if clause.risk_severity in visible_severities else 'clause-hidden-by-level' }}">
         <td>{{ clause.clause_category }}</td>
         <td class="wrap-text">{{ clause.extracted_text }}</td>
         <td>
@@ -90,4 +117,19 @@
   </div>
 </div>
 
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.addEventListener('DOMContentLoaded', () => {
+    const toggleButton = document.getElementById('toggle-hidden-clauses');
+    if (!toggleButton) return;
+    const clausesTable = document.getElementById('clauses-table');
+    toggleButton.addEventListener('click', () => {
+      const showingAll = clausesTable.classList.toggle('show-all-clauses');
+      toggleButton.setAttribute('aria-pressed', String(showingAll));
+      toggleButton.textContent = showingAll ? toggleButton.dataset.hideLabel : toggleButton.dataset.showLabel;
+    });
+  });
+</script>
 {% endblock %}

@@ -44,6 +44,18 @@
       <div class="metric-value">{{ pending_count }}</div>
       <div class="metric-trend"><i class="fa-solid fa-hourglass-half"></i> Awaiting processing</div>
     </div>
+    <div class="metric-card">
+      <div class="metric-title">AVG PROCESSING TIME</div>
+      {% if average_processing_seconds is not none %}
+        <div class="metric-value">{{ '%.1f' | format(average_processing_seconds) }}<span class="metric-unit">s</span></div>
+        <div class="metric-trend {{ 'danger' if within_target_percent < 100 else '' }}">
+          <i class="fa-solid fa-gauge-high"></i> {{ within_target_percent }}% within {{ performance_target_seconds }}s target ({{ measured_document_count }} docs)
+        </div>
+      {% else %}
+        <div class="metric-value metric-empty">No data yet</div>
+        <div class="metric-trend"><i class="fa-solid fa-gauge-high"></i> Measured from your next upload</div>
+      {% endif %}
+    </div>
   </div>
 
   <div class="card">
@@ -108,21 +120,50 @@
       <div class="controls-grid">
         <div class="field-group">
           <label for="summary-depth">Summary Depth</label>
-          <select id="summary-depth" name="summary_depth">{{ option_list(summary_depth_options, preferences.default_summary_depth) }}</select>
+          <select id="summary-depth" name="summary_depth" aria-describedby="summary-depth-hint">{{ option_list(summary_depth_options, preferences.default_summary_depth) }}</select>
+          <p class="field-hint" id="summary-depth-hint" data-hint-for="summary-depth" aria-live="polite"></p>
         </div>
         <div class="field-group">
           <label for="extraction-mode">Extraction Mode</label>
-          <select id="extraction-mode" name="extraction_mode">{{ option_list(extraction_mode_options, preferences.default_extraction_mode) }}</select>
+          <select id="extraction-mode" name="extraction_mode" aria-describedby="extraction-mode-hint">{{ option_list(extraction_mode_options, preferences.default_extraction_mode) }}</select>
+          <p class="field-hint" id="extraction-mode-hint" data-hint-for="extraction-mode" aria-live="polite"></p>
         </div>
         <div class="field-group">
           <label for="risk-level">Risk Detection Level</label>
-          <select id="risk-level" name="risk_level">{{ option_list(risk_level_options, preferences.default_risk_level) }}</select>
+          <select id="risk-level" name="risk_level" aria-describedby="risk-level-hint">{{ option_list(risk_level_options, preferences.default_risk_level) }}</select>
+          <p class="field-hint" id="risk-level-hint" data-hint-for="risk-level" aria-live="polite"></p>
         </div>
         <div class="field-group">
           <label for="context-hint">Context Hint</label>
-          <select id="context-hint" name="jurisdiction">{{ option_list(context_hint_options, preferences.default_context_hint) }}</select>
+          <select id="context-hint" name="jurisdiction" aria-describedby="context-hint-hint">{{ option_list(context_hint_options, preferences.default_context_hint) }}</select>
+          <p class="field-hint" id="context-hint-hint" data-hint-for="context-hint" aria-live="polite"></p>
         </div>
       </div>
+
+      <details class="options-guide">
+        <summary><i class="fa-solid fa-circle-question"></i> How these options work</summary>
+        <div class="options-guide-body">
+          <p><strong>Every upload goes through the same three steps.</strong> The options change step 2 and how step 3 is shown.</p>
+          <ol>
+            <li><strong>Read the file.</strong> Text is pulled out of the PDF, Word or text file. Scanned PDFs (photos of pages) have no text and will fail.</li>
+            <li><strong>Summarise it.</strong> <em>Extraction Mode</em> picks how, <em>Summary Depth</em> picks how much.</li>
+            <li><strong>Find and rate risky clauses.</strong> Keyword rules find up to one clause each for indemnity, termination, penalties, auto-renewal, governing law and confidentiality. Gemini then rates each one High, Medium or Low and says why. This happens in every mode, and only those clause sentences are sent, not the whole document.</li>
+          </ol>
+          <div class="table-scroll-wrapper">
+            <table class="data-table options-table">
+              <thead><tr><th>Mode</th><th>How the summary is made</th><th>Speed</th><th>Whole document sent to Google?</th></tr></thead>
+              <tbody>
+                <tr><td>Extractive - Fast</td><td>Copies the most central sentences word for word (LexRank)</td><td>Instant</td><td>No</td></tr>
+                <tr><td>Extractive - Premium</td><td>Copies sentences covering the main topics (LSA). Often better on long documents</td><td>Instant</td><td>No</td></tr>
+                <tr><td>Abstractive - Premium (AI)</td><td>Gemini writes a new summary in its own words</td><td>Seconds, longer when busy</td><td>Yes, up to the first ~30,000 characters (about 12 to 15 pages)</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <p><strong>Risk Detection Level</strong> only changes what the report shows. Every clause is saved, and hidden ones are one click away.</p>
+          <p><strong>Context Hint</strong> tells the AI what kind of document to expect. It is background, not legal expertise for any country, and it has no effect on extractive summaries.</p>
+          <p class="options-guide-note">Results are informational and are not legal advice.</p>
+        </div>
+      </details>
     </div>
 
     <div class="card">
@@ -459,6 +500,34 @@
         uploadForm.querySelector('button[type="submit"]').disabled = false;
         document.getElementById('processing-overlay').style.display = 'none';
       }
+    });
+
+    /* ---------- Analyzer: one-line explanation of each selected option ---------- */
+    // Keep in step with analysis.py; these describe what the code really does.
+    const optionHints = {
+      'Executive Summary': 'Short: 3 key sentences, or 3 to 5 bullet points in AI mode.',
+      'Detailed Clauses': 'Longer: 7 key sentences, or a structured review in AI mode (overview, key clauses, money and dates, risks).',
+      'Extractive - Fast': 'Copies the most central sentences word for word. Runs on this server; nothing sent to AI for the summary.',
+      'Extractive - Premium': 'Copies sentences that cover the main topics; often better on long documents. Runs on this server.',
+      'Abstractive - Premium (AI)': 'Gemini writes the summary. Sends up to ~30,000 characters to Google. If the AI is busy you get a labelled extractive summary.',
+      'All Clauses': 'The report shows every flagged clause, including low risk.',
+      'High & Medium Risk': 'The report hides low-risk clauses. Nothing is deleted; "Show all" reveals them.',
+      'High Risk Only': 'The report shows only high-risk clauses, plus any still awaiting a rating.',
+      'General Commercial': 'Background for the AI summary and risk ratings. Not legal expertise; no effect on extractive summaries.',
+      'Employment': 'Background for the AI: treat this as an employment contract. No effect on extractive summaries.',
+      'Property / Lease': 'Background for the AI: treat this as a lease or property agreement. No effect on extractive summaries.',
+    };
+
+    function updateFieldHint(selectElement) {
+      const hintElement = document.querySelector(`[data-hint-for="${selectElement.id}"]`);
+      if (hintElement) hintElement.textContent = optionHints[selectElement.value] || '';
+    }
+
+    ['summary-depth', 'extraction-mode', 'risk-level', 'context-hint'].forEach(selectId => {
+      const selectElement = document.getElementById(selectId);
+      if (!selectElement) return;
+      updateFieldHint(selectElement);
+      selectElement.addEventListener('change', () => updateFieldHint(selectElement));
     });
 
     /* ---------- Theme picker in Settings: apply and save immediately ---------- */

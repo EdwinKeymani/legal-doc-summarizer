@@ -8,6 +8,7 @@ Then open: http://127.0.0.1:5000
 """
 
 import os
+import time
 import secrets
 from datetime import datetime, timezone, timedelta
 from functools import wraps
@@ -16,6 +17,8 @@ from flask import (
     url_for, session, flash, send_from_directory, abort, jsonify
 )
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
 from markupsafe import Markup
 import markdown as markdown_renderer
 import nh3
@@ -50,7 +53,21 @@ SHOW_RESET_LINK_ON_SCREEN = os.environ.get("SHOW_RESET_LINK") == "1"
 THEME_OPTIONS = ["system", "light", "dark"]
 SUMMARY_DEPTH_OPTIONS = ["Executive Summary", "Detailed Clauses"]
 EXTRACTION_MODE_OPTIONS = ["Extractive - Fast", "Extractive - Premium", "Abstractive - Premium (AI)"]
-RISK_LEVEL_OPTIONS = ["High & Medium Risk", "High Risk Only"]
+RISK_LEVEL_OPTIONS = ["All Clauses", "High & Medium Risk", "High Risk Only"]
+
+# Which clause severities the report shows for each Risk Detection Level.
+# "Review" (not yet assessed) is always shown so a pending clause is never hidden.
+VISIBLE_SEVERITIES_BY_RISK_LEVEL = {
+    "All Clauses": {"High", "Medium", "Low", "Review"},
+    "High & Medium Risk": {"High", "Medium", "Review"},
+    "High Risk Only": {"High", "Review"},
+}
+
+# Proposal requirement 4.3: summary within 15 seconds for files under 50 pages
+PERFORMANCE_TARGET_SECONDS = 15
+
+# How long "Remember me" keeps someone signed in
+REMEMBER_ME_DAYS = 30
 CONTEXT_HINT_OPTIONS = ["General Commercial", "Employment", "Property / Lease"]
 
 MAX_UPLOAD_MEGABYTES = 25
@@ -95,6 +112,21 @@ app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_MEGABYTES * 1024 * 1024  # matches
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["SESSION_COOKIE_SECURE"] = os.environ.get("FORCE_SECURE_COOKIES") == "1"
+# Applies only when "Remember me" is ticked (session.permanent = True).
+# Otherwise the login cookie is deleted when the browser is closed.
+app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(days=REMEMBER_ME_DAYS)
+
+
+@event.listens_for(Engine, "connect")
+def enable_sqlite_foreign_keys(dbapi_connection, connection_record):
+    """SQLite ignores foreign keys unless asked. Turning them on makes local
+    testing behave like Postgres on Render, so delete-order bugs show up on
+    your machine instead of in production."""
+    if dbapi_connection.__class__.__module__.startswith("sqlite3"):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
 database = SQLAlchemy(app)
 
@@ -132,6 +164,9 @@ class Document(database.Model):
     status = database.Column(database.String(20), default="Processing")
     error_message = database.Column(database.Text)
     clauses = database.relationship("ExtractedClause", backref="document", lazy=True)
+    analysis = database.relationship(
+        "DocumentAnalysis", backref="document", uselist=False, cascade="all, delete-orphan"
+    )
 
 
 class ExtractedClause(database.Model):
@@ -141,6 +176,24 @@ class ExtractedClause(database.Model):
     extracted_text = database.Column(database.Text)
     risk_severity = database.Column(database.String(20))
     explanation = database.Column(database.Text)
+
+
+class DocumentAnalysis(database.Model):
+    """How each document was analysed: the options chosen, what actually ran,
+    how long it took, and the extracted text. Its own table (one row per
+    document) so no migration is needed. Documents uploaded before this
+    existed simply have no row; the app treats that as 'unknown'."""
+    id = database.Column(database.Integer, primary_key=True)
+    document_id = database.Column(database.Integer, database.ForeignKey("document.id"), unique=True, nullable=False)
+    summary_depth = database.Column(database.String(40))
+    extraction_mode = database.Column(database.String(40))
+    risk_level = database.Column(database.String(40))
+    context_hint = database.Column(database.String(40))
+    summary_method = database.Column(database.String(120))  # what really ran, incl. fallbacks
+    truncated_for_ai = database.Column(database.Boolean, default=False)
+    processing_seconds = database.Column(database.Float)
+    extracted_character_count = database.Column(database.Integer)
+    extracted_text = database.Column(database.Text)  # kept so restarts that wipe uploads/ lose nothing
 
 
 class UserPreference(database.Model):
@@ -315,7 +368,10 @@ def login():
         # Update this block here
         if user and check_password_hash(user.password_hash, password):
             session.clear()
-            session.permanent = True  # Added here to persist user sessions
+            # Ticked: stay signed in for REMEMBER_ME_DAYS. Unticked: signed out
+            # when the browser closes. (Previously always permanent, so the
+            # checkbox did nothing.)
+            session.permanent = request.form.get("remember") == "on"
             session["user_id"] = user.id
             session["user_name"] = user.full_name
             session["theme"] = get_user_preferences(user.id).theme
@@ -357,7 +413,7 @@ def register():
             database.session.commit()  # Saves cleanly to PostgreSQL
 
             session.clear()
-            session.permanent = True
+            session.permanent = False  # new accounts get a browser-session login
             session["user_id"] = new_user.id
             session["user_name"] = new_user.full_name
             session["theme"] = "system"
@@ -404,6 +460,18 @@ def dashboard():
     pending_count = sum(1 for document in user_documents if document.status == "Processing")
     failed_count = sum(1 for document in user_documents if document.status == "Failed")
 
+    # Evidence for the 15-second performance requirement
+    measured_seconds = [
+        document.analysis.processing_seconds for document in user_documents
+        if document.analysis and document.analysis.processing_seconds is not None
+        and document.status == "Processed"
+    ]
+    average_processing_seconds = (sum(measured_seconds) / len(measured_seconds)) if measured_seconds else None
+    within_target_percent = (
+        round(100 * sum(1 for seconds in measured_seconds if seconds <= PERFORMANCE_TARGET_SECONDS) / len(measured_seconds))
+        if measured_seconds else None
+    )
+
     current_user = database.session.get(User, session["user_id"])
 
     return render_template(
@@ -416,6 +484,10 @@ def dashboard():
         processed_today=processed_today,
         pending_count=pending_count,
         failed_count=failed_count,
+        average_processing_seconds=average_processing_seconds,
+        within_target_percent=within_target_percent,
+        measured_document_count=len(measured_seconds),
+        performance_target_seconds=PERFORMANCE_TARGET_SECONDS,
         active_view="dashboard",
         preferences=get_user_preferences(session["user_id"]),
         theme_options=THEME_OPTIONS,
@@ -469,15 +541,34 @@ def upload_document():
         "jurisdiction": pick_option(request.form.get("jurisdiction"), CONTEXT_HINT_OPTIONS),
     }
 
+    analysis_record = DocumentAnalysis(
+        summary_depth=analysis_options["summary_depth"],
+        extraction_mode=analysis_options["extraction_mode"],
+        risk_level=analysis_options["risk_level"],
+        context_hint=analysis_options["jurisdiction"],
+    )
+    processing_started_at = time.perf_counter()
+
     try:
         document_text = extract_text_from_document(file_path, file_format)
 
         if not document_text:
-            raise ValueError("No extractable text was found in this file.")
+            raise ValueError(
+                "No extractable text was found in this file. If it is a scanned PDF "
+                "(a photo of pages), it needs OCR first."
+            )
 
-        summary, detected_clauses = analyze_legal_text(document_text, analysis_options)
+        analysis_result = run_analysis(document_text, analysis_options)
+        detected_clauses = analysis_result["clauses"]
 
-        new_document.summary_text = summary
+        analysis_record.summary_method = analysis_result["summary_method"]
+        analysis_record.truncated_for_ai = analysis_result["truncated_for_ai"]
+        analysis_record.extracted_character_count = len(document_text)
+        analysis_record.extracted_text = document_text
+        analysis_record.processing_seconds = round(time.perf_counter() - processing_started_at, 2)
+        new_document.analysis = analysis_record
+
+        new_document.summary_text = analysis_result["summary"]
         new_document.status = "Processed"
 
         for clause in detected_clauses:
@@ -506,6 +597,8 @@ def upload_document():
         database.session.rollback()
         new_document.status = "Failed"
         new_document.error_message = str(exc)
+        analysis_record.processing_seconds = round(time.perf_counter() - processing_started_at, 2)
+        new_document.analysis = analysis_record
         database.session.add(new_document)
         database.session.commit()
         flash(f"'{original_name}' could not be processed: {exc}")
@@ -524,11 +617,25 @@ def view_document(document_id):
         flash("You do not have access to that document.")
         return redirect(url_for("dashboard"))
 
+    # Apply this document's Risk Detection Level when displaying. Every clause
+    # is stored; rows outside the level are hidden behind "Show all".
+    chosen_risk_level = document.analysis.risk_level if document.analysis else "All Clauses"
+    visible_severities = VISIBLE_SEVERITIES_BY_RISK_LEVEL.get(
+        chosen_risk_level, VISIBLE_SEVERITIES_BY_RISK_LEVEL["All Clauses"]
+    )
+    hidden_clause_count = sum(
+        1 for clause in document.clauses if clause.risk_severity not in visible_severities
+    )
+
     return render_template(
         "document_detail.html",
         document=document,
         user_name=session.get("user_name"),
         active_view="documents",
+        chosen_risk_level=chosen_risk_level,
+        visible_severities=visible_severities,
+        hidden_clause_count=hidden_clause_count,
+        performance_target_seconds=PERFORMANCE_TARGET_SECONDS,
     )
 
 
@@ -648,7 +755,7 @@ def forgot_password():
 
             flash(generic_message)
             if SHOW_RESET_LINK_ON_SCREEN:
-                flash(f"[DEV MODE] Reset link: {reset_link}")
+                flash(f"[DEV MODE] Reset link: {reset_link}", "persistent")
         else:
             flash(generic_message)
 
@@ -755,7 +862,11 @@ def reassess_document(document_id):
         {"category": clause.clause_category, "text": clause.extracted_text}
         for clause in pending_clauses
     ]
-    assessed_payload = assess_risk_with_llm(clause_payload, "General Commercial")
+    stored_context_hint = (
+        document.analysis.context_hint if document.analysis and document.analysis.context_hint
+        else CONTEXT_HINT_OPTIONS[0]
+    )
+    assessed_payload = assess_risk_with_llm(clause_payload, stored_context_hint)
 
     newly_assessed_count = 0
     for clause, assessed in zip(pending_clauses, assessed_payload):
@@ -780,7 +891,7 @@ def health_check():
     return "OK", 200
 
 
-from analysis import analyze_legal_text, assess_risk_with_llm  # noqa: E402
+from analysis import run_analysis, assess_risk_with_llm  # noqa: E402
 
 
 # Create any missing tables on startup (does not alter existing tables).

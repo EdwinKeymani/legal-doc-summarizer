@@ -18,9 +18,11 @@ Design:
 The Analyzer dropdowns drive real behavior here:
   - summary_depth   -> summary length
   - extraction_mode -> which summarization tier to use (see above)
-  - risk_level      -> filters which clauses are returned
-  - jurisdiction    -> passed only as a labeling hint, NOT as a claim of
-                       jurisdiction-specific legal expertise
+  - risk_level      -> decides which clauses the REPORT shows (all clauses are
+                       always stored, see run_analysis)
+  - jurisdiction    -> "Context Hint": background for the AI summary and the
+                       AI risk assessment only. NOT a claim of jurisdiction-
+                       specific legal expertise
 
 Honest scoping for the writeup:
   Extractive summarization is genuine local NLP (sumy). Abstractive summaries
@@ -93,7 +95,8 @@ def _is_retryable(error):
 def generate_with_fallback(prompt, expect_json=False):
     """
     Call Gemini with exponential backoff and model fallback.
-    Returns the response text. Raises GeminiUnavailableError if nothing worked.
+    Returns (response_text, model_name_that_answered).
+    Raises GeminiUnavailableError if nothing worked.
     """
     from google.genai import types
 
@@ -115,7 +118,7 @@ def generate_with_fallback(prompt, expect_json=False):
                 if response_text:
                     if model_name != get_configured_models()[0]:
                         logger.warning("Gemini answered via fallback model %s", model_name)
-                    return response_text
+                    return response_text, model_name
                 last_error = ValueError("Empty response")
             except Exception as error:  # noqa: BLE001 - SDK raises several types
                 last_error = error
@@ -160,50 +163,49 @@ def ensure_nltk_tokenizer_data():
     _nltk_tokenizer_checked = True
 
 
-def summarize_extractive_fast(document_text, summary_depth):
-    """LexRank algorithm via sumy. Instant, local, free."""
-    sentence_count = 3 if summary_depth == "Executive Summary" else 7
+# Sentences picked by the extractive summarisers for each Summary Depth
+EXTRACTIVE_SENTENCE_COUNT = {"Executive Summary": 3, "Detailed Clauses": 7}
+
+# Abstractive mode sends at most this many characters to Gemini (roughly
+# 12 to 15 pages). Longer documents are summarised from their opening part
+# only; the report says so.
+ABSTRACTIVE_CHARACTER_LIMIT = 30000
+
+
+def _summarize_with_sumy(document_text, summary_depth, algorithm_name):
+    """Run a sumy summariser. Returns (summary_text, method_label), where the
+    label records what really happened, including the fallback."""
+    sentence_count = EXTRACTIVE_SENTENCE_COUNT.get(summary_depth, 3)
     ensure_nltk_tokenizer_data()
+    readable_name = "LexRank" if algorithm_name == "lexrank" else "LSA"
 
     try:
         from sumy.parsers.plaintext import PlaintextParser
         from sumy.nlp.tokenizers import Tokenizer
-        from sumy.summarizers.lex_rank import LexRankSummarizer
+        if algorithm_name == "lexrank":
+            from sumy.summarizers.lex_rank import LexRankSummarizer as SummarizerClass
+        else:
+            from sumy.summarizers.lsa import LsaSummarizer as SummarizerClass
 
         parser = PlaintextParser.from_string(document_text, Tokenizer("english"))
-        summarizer = LexRankSummarizer()
-        sentences = summarizer(parser.document, sentence_count)
-        result = " ".join(str(s) for s in sentences)
+        sentences = SummarizerClass()(parser.document, sentence_count)
+        result = " ".join(str(sentence) for sentence in sentences)
         if result.strip():
-            return result
+            return result, f"Extractive ({readable_name}, {sentence_count} sentences)"
     except Exception as error:  # noqa: BLE001
-        logger.warning("LexRank failed, using first-sentences fallback: %s", error)
+        logger.warning("%s failed, using first-sentences fallback: %s", readable_name, error)
 
-    return _fallback_summary(document_text, sentence_count)
+    return _fallback_summary(document_text, sentence_count), "First sentences of the document (fallback)"
+
+
+def summarize_extractive_fast(document_text, summary_depth):
+    """LexRank: picks the sentences most similar to the rest of the document."""
+    return _summarize_with_sumy(document_text, summary_depth, "lexrank")[0]
 
 
 def summarize_extractive_premium(document_text, summary_depth):
-    """LSA algorithm via sumy. Still instant and local, but uses a different
-    (latent semantic analysis) approach that often picks more representative
-    sentences than LexRank, especially on longer/denser documents."""
-    sentence_count = 3 if summary_depth == "Executive Summary" else 7
-    ensure_nltk_tokenizer_data()
-
-    try:
-        from sumy.parsers.plaintext import PlaintextParser
-        from sumy.nlp.tokenizers import Tokenizer
-        from sumy.summarizers.lsa import LsaSummarizer
-
-        parser = PlaintextParser.from_string(document_text, Tokenizer("english"))
-        summarizer = LsaSummarizer()
-        sentences = summarizer(parser.document, sentence_count)
-        result = " ".join(str(s) for s in sentences)
-        if result.strip():
-            return result
-    except Exception as error:  # noqa: BLE001
-        logger.warning("LSA failed, using first-sentences fallback: %s", error)
-
-    return _fallback_summary(document_text, sentence_count)
+    """LSA: picks sentences that best cover the document's main topics."""
+    return _summarize_with_sumy(document_text, summary_depth, "lsa")[0]
 
 
 def _fallback_summary(document_text, sentence_count):
@@ -217,7 +219,12 @@ def _fallback_summary(document_text, sentence_count):
 # API: Abstractive summarization via Gemini (fast — one small API call,
 # not a heavy local model download like the old transformers approach)
 # ---------------------------------------------------------------------------
-def summarize_abstractive_gemini(document_text, summary_depth):
+def summarize_abstractive_gemini(document_text, summary_depth, context_hint="General Commercial"):
+    """Backward-compatible wrapper returning only the summary text."""
+    return _summarize_abstractive(document_text, summary_depth, context_hint)[0]
+
+
+def _summarize_abstractive(document_text, summary_depth, context_hint="General Commercial"):
     """
     Asks Gemini to write a real abstractive summary in its own words.
     Falls back to the fast extractive summary if no API key is set or the
@@ -225,9 +232,10 @@ def summarize_abstractive_gemini(document_text, summary_depth):
     """
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        return summarize_extractive_fast(document_text, summary_depth)
+        fallback_text, fallback_method = _summarize_with_sumy(document_text, summary_depth, "lexrank")
+        return fallback_text, fallback_method + " - AI not configured"
 
-    trimmed_text = document_text[:30000]
+    trimmed_text = document_text[:ABSTRACTIVE_CHARACTER_LIMIT]
 
     if summary_depth == "Executive Summary":
         instructions = (
@@ -248,18 +256,25 @@ def summarize_abstractive_gemini(document_text, summary_depth):
             "Provide a balanced 2-3 paragraph summary covering the document scope, main obligations, key provisions, and governing terms."
         )
 
-    prompt = f"{instructions}\n\nDocument Text:\n{trimmed_text}\n\nNote: Informational only, not formal legal advice." 
+    prompt = (
+        f"Context: this appears to be a {context_hint} document. Use that only as "
+        "background; summarise what the text actually says.\n\n"
+        f"{instructions}\n\nDocument Text:\n{trimmed_text}\n\n"
+        "Note: Informational only, not formal legal advice."
+    )
 
     try:
-        return generate_with_fallback(prompt)
+        summary_text, model_name = generate_with_fallback(prompt)
+        return summary_text, f"Abstractive (AI: {model_name})"
     except Exception as error:  # noqa: BLE001
         logger.error("Abstractive summary failed, using extractive fallback: %s", error)
 
     # Be explicit that the user is NOT looking at an AI-written summary.
-    fallback_summary = summarize_extractive_fast(document_text, summary_depth)
+    fallback_text, fallback_method = _summarize_with_sumy(document_text, summary_depth, "lexrank")
     return (
         "[Note: the AI summary service was busy, so this is a key-sentence "
-        "(extractive) summary instead.]\n\n" + fallback_summary
+        "(extractive) summary instead.]\n\n" + fallback_text,
+        fallback_method + " - AI service busy",
     )
 
 
@@ -329,7 +344,7 @@ def assess_risk_with_llm(clauses, jurisdiction):
     )
 
     try:
-        response_text = generate_with_fallback(prompt, expect_json=True)
+        response_text, _model_name = generate_with_fallback(prompt, expect_json=True)
         assessments = json.loads(response_text)
         if isinstance(assessments, dict):
             # Some models wrap the list, e.g. {"assessments": [...]}
@@ -360,37 +375,52 @@ def assess_risk_with_llm(clauses, jurisdiction):
 # ---------------------------------------------------------------------------
 # Public entry point used by app.py
 # ---------------------------------------------------------------------------
-def analyze_legal_text(document_text, options=None):
+def run_analysis(document_text, options=None):
     """
-    Run the full hybrid pipeline.
+    Run the full hybrid pipeline and report exactly what happened.
 
-    options is a dict from the Analyzer dropdowns.
-    Returns (summary_string, list_of_clause_dicts).
+    options comes from the Analyzer dropdowns. Returns a dict:
+      summary            the summary text (Markdown for AI summaries)
+      summary_method     what really produced it, including any fallback
+      clauses            list of {category, text, severity, explanation}
+      truncated_for_ai   True if the AI only saw the first part of the text
+
+    Risk Detection Level is NOT applied here any more. Every clause is
+    returned and stored; the report page filters what is shown. (Filtering
+    before saving used to throw away clauses permanently, including ones
+    still waiting for a risk assessment.)
     """
-    if options is None:
-        options = {}
+    options = options or {}
     summary_depth = options.get("summary_depth", "Executive Summary")
     extraction_mode = options.get("extraction_mode", "Extractive - Fast")
-    risk_level = options.get("risk_level", "High & Medium Risk")
-    jurisdiction = options.get("jurisdiction", "General Commercial")
+    context_hint = options.get("jurisdiction", "General Commercial")
 
     if not document_text:
-        return "No readable text could be extracted from this document.", []
+        return {"summary": "No readable text could be extracted from this document.",
+                "summary_method": "None", "clauses": [], "truncated_for_ai": False}
 
     if extraction_mode == "Abstractive - Premium (AI)":
-        summary = summarize_abstractive_gemini(document_text, summary_depth)
+        summary, summary_method = _summarize_abstractive(document_text, summary_depth, context_hint)
     elif extraction_mode == "Extractive - Premium":
-        summary = summarize_extractive_premium(document_text, summary_depth)
+        summary, summary_method = _summarize_with_sumy(document_text, summary_depth, "lsa")
     else:
-        summary = summarize_extractive_fast(document_text, summary_depth)
+        summary, summary_method = _summarize_with_sumy(document_text, summary_depth, "lexrank")
 
-    clauses = find_clauses(document_text)
-    clauses = assess_risk_with_llm(clauses, jurisdiction)
+    clauses = assess_risk_with_llm(find_clauses(document_text), context_hint)
 
-    if risk_level == "High Risk Only":
-        clauses = [c for c in clauses if c.get("severity") == "High"]
+    return {
+        "summary": summary,
+        "summary_method": summary_method,
+        "clauses": clauses,
+        "truncated_for_ai": (extraction_mode == "Abstractive - Premium (AI)"
+                             and len(document_text) > ABSTRACTIVE_CHARACTER_LIMIT),
+    }
 
-    return summary, clauses
+
+def analyze_legal_text(document_text, options=None):
+    """Backward-compatible wrapper: returns (summary, clauses)."""
+    result = run_analysis(document_text, options)
+    return result["summary"], result["clauses"]
 
 
 # ---------------------------------------------------------------------------

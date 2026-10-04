@@ -1,340 +1,368 @@
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-      font-family: 'Plus Jakarta Sans', sans-serif;
-    }
+/* =========================================================================
+   Sign-in, sign-up and password pages.
+   Left: a yellow legal pad on a dark green desk, with a contract excerpt
+   marked up in the same red / amber / green the app uses for risk levels.
+   Built entirely in CSS (no image files). Right: the form.
+   ========================================================================= */
 
-    html, body {
-      width: 100%;
-      height: 100%;
-      overflow: hidden;
-      background-color: #ffffff;
-    }
+:root {
+  color-scheme: light;
+  --desk-top: #17291f;
+  --desk-bottom: #0d1913;
+  --pad-paper: #fbf0a8;
+  --pad-rule: rgba(70, 116, 179, 0.32);
+  --pad-margin: rgba(196, 52, 52, 0.55);
+  --pad-binding: #7a2e24;
+  --pad-ink: #26272b;
+  --pen-red: #c0392b;
+  --mark-high: rgba(255, 92, 92, 0.42);
+  --mark-medium: rgba(255, 166, 0, 0.42);
+  --mark-low: rgba(56, 210, 112, 0.42);
 
-    .container {
-      display: flex;
-      width: 100vw;
-      height: 100vh;
-      background: #ffffff;
-    }
-
-    /* Left Side Branding Panel */
-    .brand-panel {
-      flex: 1.1;
-      margin: 16px;
-      border-radius: 24px;
-      background: linear-gradient(135deg, #1a0826 0%, #0d021a 100%);
-      background-image: url(Images/justice-bg.jpg.png);
-      background-size: cover;
-      background-position: center;
-    
-      /* background-image: 
-        radial-gradient(circle at 80% 20%, rgba(236, 72, 153, 0.4), transparent 45%),
-        radial-gradient(circle at 20% 50%, rgba(168, 85, 247, 0.4), transparent 45%),
-        radial-gradient(circle at 60% 80%, rgba(59, 130, 246, 0.4), transparent 45%); */
-      position: relative;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      padding: 60px;
-      color: #ffffff;
-      overflow: hidden;
-    }
-
-    /* .brand-panel:hover {
-      transform: scale(1.02);
-      transition: transform 0.3s ease-in-out;
-    } */
-
-    /* Glow effect */
-    /* .brand-panel::after {
-      content: '';
-      position: absolute;
-      top: -10%;
-      left: -20%;
-      width: 140%;
-      height: 120%;
-      background: radial-gradient(ellipse at center, rgba(236, 72, 153, 0.25) 0%, rgba(147, 51, 234, 0.2) 40%, transparent 70%);
-      filter: blur(40px);
-      pointer-events: none;
-    } */
-
-    .quote-header {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      font-size: 12px;
-      letter-spacing: 2px;
-      color: rgba(255, 255, 255, 0.7);
-      text-transform: uppercase;
-      z-index: 2;
-    }
-
-    .quote-header::after {
-      content: '';
-      flex: 1;
-      max-width: 120px;
-      height: 1px;
-      background: rgba(255, 255, 255, 0.3);
-    }
-
-    .quote-content {
-      z-index: 2;
-      max-width: 480px;
-    }
-
-    .quote-title {
-      font-family: 'Playfair Display', serif;
-      font-size: 52px;
-      line-height: 1.15;
-      font-weight: 600;
-      margin-bottom: 24px;
-      color: #ffffff;
-    }
-
-    .quote-text {
-      font-size: 14px;
-      color: rgba(255, 255, 255, 0.75);
-      line-height: 1.6;
-    }
-
-    /* Right Side Form Panel */
-    .form-panel {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      justify-content: center;
-      align-items: center;
-      padding: 60px;
-      background: #ffffff;
-      position: relative;
-    }
-
-    .form-wrapper {
-      width: 100%;
-      max-width: 380px;
-    }
-
-    .form-header {
-      text-align: center;
-      margin-bottom: 32px;
-    }
-
-    .form-header h2 {
-      font-family: 'Playfair Display', serif;
-      font-size: 36px;
-      font-weight: 600;
-      color: #111827;
-      margin-bottom: 8px;
-    }
-
-    .form-header p {
-      font-size: 13px;
-      color: #6b7280;
-    }
-
-    .form-group {
-      margin-bottom: 20px;
-    }
-
-    .form-group label {
-      display: block;
-      font-size: 12px;
-      font-weight: 600;
-      color: #374151;
-      margin-bottom: 8px;
-    }
-
-    .input-wrapper {
-      position: relative;
-    }
-
-    .form-group input {
-      width: 100%;
-      padding: 14px 16px;
-      background-color: #f8fafc;
-      border: 1px solid #f1f5f9;
-      border-radius: 10px;
-      font-size: 14px;
-      color: #1e293b;
-      outline: none;
-      transition: all 0.2s ease;
-    }
-
-    .form-group input::placeholder {
-      color: #94a3b8;
-    }
-
-    .form-group input:focus {
-      background-color: #ffffff;
-      border-color: #cbd5e1;
-      box-shadow: 0 0 0 3px rgba(203, 213, 225, 0.3);
-    }
-
-    .toggle-password {
-      position: absolute;
-      right: 14px;
-      top: 50%;
-      transform: translateY(-50%);
-      color: #94a3b8;
-      cursor: pointer;
-      font-size: 14px;
-    }
-
-    .form-options {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-size: 12px;
-      margin-bottom: 24px;
-    }
-
-    .remember-me {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      color: #475569;
-      cursor: pointer;
-    }
-
-    .remember-me input {
-      accent-color: #0f172a;
-      border-radius: 4px;
-    }
-
-    .forgot-link {
-      color: #334155;
-      text-decoration: none;
-      font-weight: 500;
-    }
-
-    .forgot-link:hover {
-      text-decoration: underline;
-    }
-
-    .btn-submit {
-      width: 100%;
-      padding: 14px;
-      background-color: #000000;
-      color: #ffffff;
-      border: none;
-      border-radius: 10px;
-      font-size: 14px;
-      font-weight: 500;
-      cursor: pointer;
-      margin-bottom: 12px;
-      transition: background-color 0.2s ease;
-    }
-
-    .btn-submit:hover {
-      background-color: #1e293b;
-    }
-
-    .btn-google {
-      width: 100%;
-      padding: 13px;
-      background-color: #ffffff;
-      color: #334155;
-      border: 1px solid #e2e8f0;
-      border-radius: 10px;
-      font-size: 13px;
-      font-weight: 500;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 10px;
-      transition: background-color 0.2s ease;
-    }
-
-    .btn-google:hover {
-      background-color: #f8fafc;
-    }
-
-    .signup-text {
-      position: absolute;
-      bottom: 40px;
-      font-size: 13px;
-      color: #64748b;
-    }
-
-    .signup-text a {
-      color: #0f172a;
-      font-weight: 600;
-      text-decoration: none;
-    }
-
-    .signup-text a:hover {
-      text-decoration: underline;
-    }
-
-    /* Responsive adjustments */
-    @media (max-width: 900px) {
-      body, html {
-        overflow: auto;
-      }
-      .container {
-        flex-direction: column;
-        height: auto;
-      }
-      .brand-panel {
-        min-height: 360px;
-        margin: 0;
-        border-radius: 0;
-        padding: 40px 20px;
-      }
-      .form-panel {
-        padding: 60px 20px;
-      }
-      .signup-text {
-        position: relative;
-        bottom: 0;
-        margin-top: 40px;
-      }
-    }
-/* Register-specific: tighter vertical rhythm for the extra field */
-.form-group { margin-bottom: 16px; }
-.flash-message {
-  background-color: #fef2f2;
-  color: #b91c1c;
-  border: 1px solid #fecaca;
-  padding: 12px 16px;
-  border-radius: 10px;
-  font-size: 13px;
-  margin-bottom: 20px;
+  --form-bg: #ffffff;
+  --form-heading: #111827;
+  --form-text: #374151;
+  --form-muted: #6b7280;
+  --input-bg: #f8fafc;
+  --input-border: #e2e8f0;
+  --input-text: #1e293b;
+  --input-placeholder: #94a3b8;
+  --input-focus-border: #16a34a;
+  --input-focus-ring: rgba(22, 163, 74, 0.2);
+  --button-bg: #0f172a;
+  --button-hover: #1e293b;
+  --button-text: #ffffff;
+  --link: #0f172a;
 }
 
-.flash-message.success { background-color: #f0fdf4; color: #15803d; border-color: #bbf7d0; }
-
-
-/* ---------- Dark theme (matches the app's Light / Dark / System setting) ---------- */
-:root[data-theme="dark"] { color-scheme: dark; }
-:root[data-theme="dark"] .form-panel, :root[data-theme="dark"] .container, :root[data-theme="dark"], :root[data-theme="dark"] body { background-color: #0b1120; }
-:root[data-theme="dark"] .form-header h2, :root[data-theme="dark"] .signup-text a { color: #e5e7eb; }
-:root[data-theme="dark"] .form-header p, :root[data-theme="dark"] .signup-text { color: #94a3b8; }
-:root[data-theme="dark"] .form-group label, :root[data-theme="dark"] .remember-me, :root[data-theme="dark"] .forgot-link { color: #cbd5e1; }
-:root[data-theme="dark"] .form-group input { background-color: #111827; border-color: #263244; color: #e5e7eb; }
-:root[data-theme="dark"] .form-group input::placeholder { color: #64748b; }
-:root[data-theme="dark"] .form-group input:focus { background-color: #0f172a; border-color: #22c55e; box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.3); }
-:root[data-theme="dark"] .btn-submit { background-color: #e5e7eb; color: #0b1120; }
-:root[data-theme="dark"] .btn-submit:hover { background-color: #ffffff; }
-:root[data-theme="dark"] .remember-me input { accent-color: #22c55e; }
-:root[data-theme="dark"] .flash-message { background-color: rgba(248, 113, 113, 0.12); color: #fca5a5; border-color: rgba(248, 113, 113, 0.35); }
-:root[data-theme="dark"] .flash-message.success { background-color: rgba(34, 197, 94, 0.12); color: #4ade80; border-color: rgba(34, 197, 94, 0.35); }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --pad-paper: #e6d98f;
+  --form-bg: #0b1120;
+  --form-heading: #e5e7eb;
+  --form-text: #cbd5e1;
+  --form-muted: #94a3b8;
+  --input-bg: #111827;
+  --input-border: #263244;
+  --input-text: #e5e7eb;
+  --input-placeholder: #64748b;
+  --input-focus-border: #22c55e;
+  --input-focus-ring: rgba(34, 197, 94, 0.25);
+  --button-bg: #e5e7eb;
+  --button-hover: #ffffff;
+  --button-text: #0b1120;
+  --link: #e5e7eb;
+}
 
 @media (prefers-color-scheme: dark) {
-:root:not([data-theme="light"]) { color-scheme: dark; }
-:root:not([data-theme="light"]) .form-panel, :root:not([data-theme="light"]) .container, :root:not([data-theme="light"]), :root:not([data-theme="light"]) body { background-color: #0b1120; }
-:root:not([data-theme="light"]) .form-header h2, :root:not([data-theme="light"]) .signup-text a { color: #e5e7eb; }
-:root:not([data-theme="light"]) .form-header p, :root:not([data-theme="light"]) .signup-text { color: #94a3b8; }
-:root:not([data-theme="light"]) .form-group label, :root:not([data-theme="light"]) .remember-me, :root:not([data-theme="light"]) .forgot-link { color: #cbd5e1; }
-:root:not([data-theme="light"]) .form-group input { background-color: #111827; border-color: #263244; color: #e5e7eb; }
-:root:not([data-theme="light"]) .form-group input::placeholder { color: #64748b; }
-:root:not([data-theme="light"]) .form-group input:focus { background-color: #0f172a; border-color: #22c55e; box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.3); }
-:root:not([data-theme="light"]) .btn-submit { background-color: #e5e7eb; color: #0b1120; }
-:root:not([data-theme="light"]) .btn-submit:hover { background-color: #ffffff; }
-:root:not([data-theme="light"]) .remember-me input { accent-color: #22c55e; }
-:root:not([data-theme="light"]) .flash-message { background-color: rgba(248, 113, 113, 0.12); color: #fca5a5; border-color: rgba(248, 113, 113, 0.35); }
-:root:not([data-theme="light"]) .flash-message.success { background-color: rgba(34, 197, 94, 0.12); color: #4ade80; border-color: rgba(34, 197, 94, 0.35); }
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --pad-paper: #e6d98f;
+    --form-bg: #0b1120;
+    --form-heading: #e5e7eb;
+    --form-text: #cbd5e1;
+    --form-muted: #94a3b8;
+    --input-bg: #111827;
+    --input-border: #263244;
+    --input-text: #e5e7eb;
+    --input-placeholder: #64748b;
+    --input-focus-border: #22c55e;
+    --input-focus-ring: rgba(34, 197, 94, 0.25);
+    --button-bg: #e5e7eb;
+    --button-hover: #ffffff;
+    --button-text: #0b1120;
+    --link: #e5e7eb;
+  }
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+}
+
+/* min-height + auto overflow: on short screens (e.g. 1366x768 laptops) the
+   page scrolls instead of cutting off the bottom of the form. */
+html, body {
+  width: 100%;
+  min-height: 100%;
+  background-color: var(--form-bg);
+}
+
+.container {
+  display: flex;
+  width: 100%;
+  min-height: 100vh;
+  background: var(--form-bg);
+}
+
+/* ---------- Brand panel: the desk ---------- */
+.brand-panel {
+  flex: 1.1;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 32px;
+  padding: 48px 56px;
+  color: #f4f1e8;
+  background:
+    /* faint leather grain, generated as SVG noise */
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0.09 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"),
+    linear-gradient(160deg, var(--desk-top), var(--desk-bottom));
+}
+
+.brand-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 2.5px;
+  text-transform: uppercase;
+  color: rgba(244, 241, 232, 0.75);
+}
+
+.brand-mark {
+  width: 34px;
+  height: 34px;
+  border: 1.5px solid rgba(244, 241, 232, 0.5);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Playfair Display', serif;
+  font-size: 18px;
+  letter-spacing: 0;
+  color: #f4f1e8;
+}
+
+/* ---------- The legal pad ---------- */
+.legal-pad {
+  position: relative;
+  align-self: center;
+  width: min(100%, 470px);
+  padding: 46px 28px 26px 70px;
+  transform: rotate(-2.2deg);
+  background-color: var(--pad-paper);
+  background-image:
+    linear-gradient(90deg, transparent 54px, var(--pad-margin) 54px, var(--pad-margin) 55px,
+                    transparent 55px, transparent 58px, var(--pad-margin) 58px, var(--pad-margin) 59px, transparent 59px),
+    repeating-linear-gradient(180deg, transparent 0, transparent 27px, var(--pad-rule) 27px, var(--pad-rule) 28px);
+  background-position: 0 0, 0 46px;
+  border-radius: 2px 2px 4px 4px;
+  box-shadow:
+    0 1px 0 rgba(0, 0, 0, 0.08),
+    0 22px 40px rgba(0, 0, 0, 0.45),
+    0 4px 0 -1px #efe39a,
+    0 8px 0 -2px #e3d68c; /* sheets underneath */
+}
+
+.pad-binding {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 22px;
+  background: var(--pad-binding);
+  border-radius: 2px 2px 0 0;
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.18);
+}
+
+.pad-clause {
+  font-family: 'Courier Prime', 'Courier New', monospace;
+  font-size: 13.5px;
+  line-height: 28px; /* sits on the ruled lines */
+  color: var(--pad-ink);
+}
+
+.clause-number {
+  position: absolute;
+  left: 18px;
+  font-weight: 700;
+  color: rgba(38, 39, 43, 0.6);
+}
+
+/* The global * rule sets a font on every element, so child elements must
+   inherit explicitly or they fall back to the sans-serif body font. */
+.pad-clause mark,
+.pad-clause .clause-number,
+.brand-headline em { font-family: inherit; }
+
+/* Highlighter strokes: slightly uneven, like a real marker */
+.pad-clause mark {
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 3px 6px 4px 7px;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.mark-high { background: var(--mark-high); }
+.mark-medium { background: var(--mark-medium); }
+.mark-low { background: var(--mark-low); }
+
+.margin-note {
+  display: block;
+  text-align: right;
+  font-family: 'Caveat', 'Segoe Print', cursive;
+  font-size: 21px;
+  line-height: 28px;
+  color: var(--pen-red);
+  transform: rotate(-3deg);
+  margin-right: 4px;
+}
+
+.margin-note::before { content: "\2190  "; }
+
+/* ---------- Headline ---------- */
+.brand-copy { position: relative; max-width: 460px; }
+
+.brand-headline {
+  font-family: 'Playfair Display', serif;
+  font-size: 46px;
+  line-height: 1.08;
+  font-weight: 600;
+  color: #f4f1e8;
+  margin-bottom: 14px;
+}
+
+.brand-headline em {
+  font-style: italic;
+  color: #f2d95c; /* legal-pad yellow */
+}
+
+.brand-subtitle {
+  font-size: 14px;
+  line-height: 1.6;
+  color: rgba(244, 241, 232, 0.72);
+}
+
+/* ---------- Form panel ---------- */
+.form-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 60px;
+  background: var(--form-bg);
+  position: relative;
+}
+
+.form-wrapper { width: 100%; max-width: 380px; }
+
+.form-header { text-align: center; margin-bottom: 32px; }
+
+.form-header h2 {
+  font-family: 'Playfair Display', serif;
+  font-size: 36px;
+  font-weight: 600;
+  color: var(--form-heading);
+  margin-bottom: 8px;
+}
+
+.form-header p { font-size: 13px; color: var(--form-muted); }
+
+.form-group { margin-bottom: 18px; }
+
+.form-group label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--form-text);
+  margin-bottom: 8px;
+}
+
+.input-wrapper { position: relative; }
+
+.form-group input {
+  width: 100%;
+  padding: 14px 16px;
+  background-color: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 10px;
+  font-size: 14px;
+  color: var(--input-text);
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.form-group input::placeholder { color: var(--input-placeholder); }
+
+.form-group input:focus {
+  border-color: var(--input-focus-border);
+  box-shadow: 0 0 0 3px var(--input-focus-ring);
+}
+
+.form-options {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  margin-bottom: 24px;
+}
+
+.remember-me {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--form-text);
+  cursor: pointer;
+}
+
+.remember-me input { accent-color: #16a34a; width: 15px; height: 15px; }
+
+.forgot-link {
+  color: var(--form-text);
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.forgot-link:hover { text-decoration: underline; }
+
+.btn-submit {
+  width: 100%;
+  padding: 14px;
+  background-color: var(--button-bg);
+  color: var(--button-text);
+  border: none;
+  border-radius: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: 12px;
+  transition: background-color 0.2s ease;
+}
+
+.btn-submit:hover { background-color: var(--button-hover); }
+
+:focus-visible { outline: 2px solid var(--input-focus-border); outline-offset: 2px; }
+
+.signup-text {
+  position: absolute;
+  bottom: 40px;
+  font-size: 13px;
+  color: var(--form-muted);
+}
+
+.signup-text a { color: var(--link); font-weight: 600; text-decoration: none; }
+.signup-text a:hover { text-decoration: underline; }
+
+/* ---------- Small screens ---------- */
+@media (max-width: 900px) {
+  .container { flex-direction: column; }
+  .brand-panel { padding: 32px 24px; gap: 20px; min-height: 0; }
+  .legal-pad { display: none; } /* keep the form within reach on phones */
+  .brand-headline { font-size: 34px; }
+  .form-panel { padding: 40px 20px 32px; }
+  .signup-text { position: static; margin-top: 32px; }
+}
+
+@media (max-height: 760px) and (min-width: 901px) {
+  /* Short laptop screens: shrink the pad so the headline still fits */
+  .legal-pad { padding-top: 40px; padding-bottom: 14px; }
+  .pad-clause:nth-of-type(3), .pad-clause:nth-of-type(3) + .margin-note { display: none; }
+  .brand-headline { font-size: 38px; }
 }

@@ -9,3 +9,7 @@ __pycache__/
 uploads/
 legal.db
 .env
+instance/
+# Database backups contain password hashes and document text. Never commit them.
+backups/
+*backup*.json
