@@ -292,8 +292,14 @@ CLAUSE_RULES = [
 
 
 def split_into_sentences(text):
-    sentences = re.split(r"(?<=[.;])\s+", text)
-    return [s.strip() for s in sentences if len(s.strip()) > 15]
+    """Uses the heading-aware splitter from provisions.py, so section titles
+    ('CONFIDENTIALITY', '8. GENERAL') never fuse with the clause below them.
+    Semicolons still split, as list-style clauses often use them."""
+    from provisions import split_sentences
+    sentences = []
+    for sentence in split_sentences(text):
+        sentences.extend(part.strip() for part in re.split(r"(?<=;)\s+", sentence))
+    return [sentence for sentence in sentences if len(sentence) > 15]
 
 
 def find_clauses(document_text):

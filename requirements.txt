@@ -25,3 +25,6 @@ google-genai==2.25.0
 # Safe rendering of AI summaries (Markdown -> sanitised HTML)
 markdown==3.11
 nh3==0.3.7
+
+# PDF report export (Word export uses python-docx, already listed)
+reportlab==5.0.1

@@ -18,6 +18,26 @@
   {% endif %}
 </p>
 
+{% if document.status == 'Processed' %}
+<div class="report-actions">
+  <a class="btn-secondary" href="{{ url_for('export_report', document_id=document.id, export_format='pdf') }}">
+    <i class="fa-solid fa-file-pdf"></i> Export PDF
+  </a>
+  <a class="btn-secondary" href="{{ url_for('export_report', document_id=document.id, export_format='docx') }}">
+    <i class="fa-solid fa-file-word"></i> Export Word
+  </a>
+  {% if original_file_available %}
+  <a class="btn-secondary" href="{{ url_for('download_document', document_id=document.id) }}">
+    <i class="fa-solid fa-download"></i> Download original
+  </a>
+  {% else %}
+  <span class="btn-secondary btn-disabled" title="The original file was cleared from the server; the analysis is unaffected.">
+    <i class="fa-solid fa-download"></i> Original no longer on server
+  </span>
+  {% endif %}
+</div>
+{% endif %}
+
 {% if document.status == 'Failed' %}
 <div class="flash-message" role="alert">
   <strong>This document could not be processed.</strong><br>
@@ -117,11 +137,118 @@
   </div>
 </div>
 
+{% if document.status == 'Processed' %}
+<!-- Key provisions: obligations, prohibitions, rights, liabilities -->
+<div class="card">
+  <div class="card-header">
+    <div class="card-title"><i class="fa-solid fa-scale-balanced" style="color: var(--primary-green);"></i> Key Provisions</div>
+    <span class="method-badge" title="Found by transparent keyword rules, not AI">Keyword rules</span>
+  </div>
+  {% if not provisions_available %}
+    <p class="empty-state">Not available for this document: it was uploaded before its text was stored (3 October 2026). Upload it again to see obligations, rights and key dates.</p>
+  {% else %}
+    <div class="provision-tabs" role="tablist" aria-label="Provision types">
+      {% for provision_label, description, groups in provision_sections %}
+        {% set type_total = groups | map(attribute=1) | map('length') | sum %}
+        <button type="button" class="provision-tab" role="tab" id="tab-{{ provision_label | lower }}"
+                aria-controls="panel-{{ provision_label | lower }}" aria-selected="{{ 'true' if loop.first else 'false' }}"
+                tabindex="{{ '0' if loop.first else '-1' }}">
+          {{ provision_label }}<span class="tab-count">{{ type_total }}</span>
+        </button>
+      {% endfor %}
+    </div>
+    {% for provision_label, description, groups in provision_sections %}
+      <div class="provision-panel" role="tabpanel" id="panel-{{ provision_label | lower }}"
+           aria-labelledby="tab-{{ provision_label | lower }}" {% if not loop.first %}hidden{% endif %}>
+        <p class="provision-panel-description">{{ description }}. Grouped by the party each sentence names as its subject.</p>
+        {% for party, texts in groups %}
+          <div class="party-group">
+            <div class="party-name">{{ party }} <span class="party-count">({{ texts | length }})</span></div>
+            <ul class="provision-list">
+              {% for text in texts %}
+                <li class="{{ 'collapsed-item' if loop.index > 5 else '' }}">{{ text }}</li>
+              {% endfor %}
+            </ul>
+            {% if texts | length > 5 %}
+              <button type="button" class="show-more-button" data-more-label="Show {{ texts | length - 5 }} more" data-less-label="Show fewer">Show {{ texts | length - 5 }} more</button>
+            {% endif %}
+          </div>
+        {% else %}
+          <p class="empty-state">None found.</p>
+        {% endfor %}
+      </div>
+    {% endfor %}
+  {% endif %}
+</div>
+
+<!-- Key terms: dates, deadlines, amounts, rates -->
+<div class="card">
+  <div class="card-header">
+    <div class="card-title"><i class="fa-solid fa-calendar-days" style="color: var(--primary-green);"></i> Key Dates, Deadlines, Amounts and Rates</div>
+  </div>
+  {% if not provisions_available %}
+    <p class="empty-state">Not available for documents uploaded before 3 October 2026.</p>
+  {% else %}
+    {% set term_rows = [] %}
+    {% for term_type, items in key_terms.items() %}{% for item in items %}{% set _ = term_rows.append((term_type, item)) %}{% endfor %}{% endfor %}
+    {% if term_rows %}
+    <div class="table-scroll-wrapper">
+      <table class="data-table">
+        <thead><tr><th>Type</th><th>Value</th><th>In context</th></tr></thead>
+        <tbody>
+          {% for term_type, item in term_rows %}
+          <tr>
+            <td>{{ term_type }}</td>
+            <td><span class="term-value">{{ item.value }}</span>
+              {% if item.date %}<span class="term-date">{{ item.date.strftime('%a %d %b %Y') }}</span>{% endif %}</td>
+            <td class="assessment-text" style="max-width: 520px;">{{ item.context }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+      <p class="empty-state">No dates, deadlines, amounts or rates found.</p>
+    {% endif %}
+  {% endif %}
+</div>
+{% endif %}
+
 {% endblock %}
 
 {% block scripts %}
 <script>
   document.addEventListener('DOMContentLoaded', () => {
+    /* Key provisions tabs (arrow keys move between tabs) */
+    const provisionTabs = Array.from(document.querySelectorAll('.provision-tab'));
+    function selectTab(selectedTab) {
+      provisionTabs.forEach(tab => {
+        const isSelected = tab === selectedTab;
+        tab.setAttribute('aria-selected', String(isSelected));
+        tab.tabIndex = isSelected ? 0 : -1;
+        document.getElementById(tab.getAttribute('aria-controls')).hidden = !isSelected;
+      });
+    }
+    provisionTabs.forEach((tab, tabIndex) => {
+      tab.addEventListener('click', () => selectTab(tab));
+      tab.addEventListener('keydown', (event) => {
+        if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return;
+        const step = event.key === 'ArrowRight' ? 1 : -1;
+        const nextTab = provisionTabs[(tabIndex + step + provisionTabs.length) % provisionTabs.length];
+        selectTab(nextTab);
+        nextTab.focus();
+      });
+    });
+
+    /* Show more / fewer within a party group */
+    document.querySelectorAll('.show-more-button').forEach(button => {
+      button.addEventListener('click', () => {
+        const list = button.previousElementSibling;
+        const expanded = list.classList.toggle('expanded');
+        button.textContent = expanded ? button.dataset.lessLabel : button.dataset.moreLabel;
+      });
+    });
+
     const toggleButton = document.getElementById('toggle-hidden-clauses');
     if (!toggleButton) return;
     const clausesTable = document.getElementById('clauses-table');

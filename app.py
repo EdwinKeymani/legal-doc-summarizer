@@ -7,6 +7,7 @@ Run with:  python app.py
 Then open: http://127.0.0.1:5000
 """
 
+import io
 import os
 import time
 import secrets
@@ -14,7 +15,7 @@ from datetime import datetime, timezone, timedelta
 from functools import wraps
 from flask import (
     Flask, render_template, request, redirect,
-    url_for, session, flash, send_from_directory, abort, jsonify
+    url_for, session, flash, send_from_directory, send_file, abort, jsonify
 )
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import event
@@ -236,7 +237,9 @@ def extract_text_from_document(file_path, file_format):
     elif file_format == "docx":
         document_object = docx.Document(file_path)
         for paragraph in document_object.paragraphs:
-            extracted_text += paragraph.text + "\n"
+            # Blank line between paragraphs: a Word paragraph is a separate
+            # block, so headings and form fields never fuse with the next one.
+            extracted_text += paragraph.text + "\n\n"
 
     elif file_format == "txt":
         with open(file_path, "r", encoding="utf-8", errors="ignore") as text_file:
@@ -309,6 +312,31 @@ def iso_utc_filter(datetime_value):
     if datetime_value is None:
         return ""
     return as_utc(datetime_value).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def build_provision_view(document):
+    """Obligations, prohibitions, rights, liabilities and key terms for one
+    document, computed from the text stored at upload. Rule-based and fast
+    (milliseconds), so it runs on demand and improvements to the rules apply
+    to older documents too. Returns (sections, key_terms, is_available)."""
+    stored_text = document.analysis.extracted_text if document.analysis else None
+    if not stored_text:
+        return [], {}, False
+    found_provisions = extract_provisions(stored_text)
+    sections = [
+        # (plural label for headings, description, [(party, [sentences])])
+        (PROVISION_PLURALS[provision_type], PROVISION_DESCRIPTIONS[provision_type], group_by_party(found_provisions[provision_type]))
+        for provision_type in PROVISION_TYPES
+    ]
+    return sections, extract_key_terms(stored_text), True
+
+
+def original_file_exists(document):
+    """Render's free tier wipes uploads/ on every restart, so the original
+    file can be gone even though its analysis (in the database) is fine."""
+    return bool(document.stored_name) and os.path.exists(
+        os.path.join(app.config["UPLOAD_FOLDER"], document.stored_name)
+    )
 
 
 def as_utc(datetime_value):
@@ -451,6 +479,23 @@ def dashboard():
         .count()
     )
 
+    # Risk profile chart: clause counts per severity, and per category
+    severity_rows = (
+        database.session.query(ExtractedClause.risk_severity, database.func.count(ExtractedClause.id))
+        .join(Document).filter(Document.user_id == session["user_id"])
+        .group_by(ExtractedClause.risk_severity).all()
+    )
+    severity_counts = {severity: 0 for severity in ("High", "Medium", "Low", "Review")}
+    for severity, clause_count in severity_rows:
+        severity_counts[severity if severity in severity_counts else "Review"] += clause_count
+    category_rows = (
+        database.session.query(ExtractedClause.clause_category, database.func.count(ExtractedClause.id))
+        .join(Document).filter(Document.user_id == session["user_id"])
+        .filter(ExtractedClause.risk_severity == "High")
+        .group_by(ExtractedClause.clause_category)
+        .order_by(database.func.count(ExtractedClause.id).desc()).limit(5).all()
+    )
+
     start_of_today = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
     processed_today = sum(
         1 for document in user_documents
@@ -481,6 +526,9 @@ def dashboard():
         documents=user_documents,
         total_documents=total_documents,
         high_risk_count=high_risk_count,
+        severity_counts=severity_counts,
+        total_clause_count=sum(severity_counts.values()),
+        top_high_risk_categories=category_rows,
         processed_today=processed_today,
         pending_count=pending_count,
         failed_count=failed_count,
@@ -627,6 +675,8 @@ def view_document(document_id):
         1 for clause in document.clauses if clause.risk_severity not in visible_severities
     )
 
+    provision_sections, key_terms, provisions_available = build_provision_view(document)
+
     return render_template(
         "document_detail.html",
         document=document,
@@ -636,6 +686,58 @@ def view_document(document_id):
         visible_severities=visible_severities,
         hidden_clause_count=hidden_clause_count,
         performance_target_seconds=PERFORMANCE_TARGET_SECONDS,
+        provision_sections=provision_sections,
+        key_terms=key_terms,
+        provisions_available=provisions_available,
+        original_file_available=original_file_exists(document),
+    )
+
+
+EXPORT_FORMATS = {
+    "pdf": ("application/pdf", "pdf"),
+    "docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", "docx"),
+}
+
+
+@app.route("/document/<int:document_id>/export/<export_format>")
+@login_required
+def export_report(document_id, export_format):
+    """Download the analysis as a PDF or Word report (proposal requirement 4.2)."""
+    if export_format not in EXPORT_FORMATS:
+        abort(404)
+    document = database.session.get(Document, document_id)
+    if document is None:
+        abort(404)
+    if document.user_id != session["user_id"]:
+        flash("You do not have access to that document.")
+        return redirect(url_for("dashboard"))
+    if document.status != "Processed":
+        flash("Only successfully processed documents can be exported.")
+        return redirect(url_for("view_document", document_id=document.id))
+
+    provision_sections, key_terms, _ = build_provision_view(document)
+    chosen_risk_level = document.analysis.risk_level if document.analysis else None
+    risk_level_note = (
+        f"All {len(document.clauses)} flagged clauses are included, although '{chosen_risk_level}' was chosen for on-screen display."
+        if chosen_risk_level and chosen_risk_level != "All Clauses" else None
+    )
+    content = build_report_content(
+        document, render_markdown_filter(document.summary_text), provision_sections, key_terms, risk_level_note
+    )
+
+    try:
+        file_bytes = export_pdf(content) if export_format == "pdf" else export_docx(content)
+    except Exception as error:  # noqa: BLE001
+        app.logger.exception("Report export failed for document %s: %s", document.id, error)
+        flash("The report could not be generated. Please try again, or try the other format.")
+        return redirect(url_for("view_document", document_id=document.id))
+
+    mime_type, extension = EXPORT_FORMATS[export_format]
+    return send_file(
+        io.BytesIO(file_bytes),
+        mimetype=mime_type,
+        as_attachment=True,
+        download_name=report_filename(document.file_name, extension),
     )
 
 
@@ -832,6 +934,13 @@ def download_document(document_id):
         flash("You do not have access to that document.")
         return redirect(url_for("dashboard"))
 
+    if not original_file_exists(document):
+        flash(
+            "The original file is no longer on the server (the free hosting tier clears "
+            "uploaded files when it restarts). The analysis is unaffected; you can export it as a report."
+        )
+        return redirect(url_for("view_document", document_id=document.id))
+
     return send_from_directory(
         app.config["UPLOAD_FOLDER"],
         document.stored_name,
@@ -892,6 +1001,10 @@ def health_check():
 
 
 from analysis import run_analysis, assess_risk_with_llm  # noqa: E402
+from provisions import (  # noqa: E402
+    PROVISION_TYPES, PROVISION_PLURALS, PROVISION_DESCRIPTIONS, extract_provisions, extract_key_terms, group_by_party,
+)
+from report_export import build_report_content, export_docx, export_pdf, report_filename  # noqa: E402
 
 
 # Create any missing tables on startup (does not alter existing tables).

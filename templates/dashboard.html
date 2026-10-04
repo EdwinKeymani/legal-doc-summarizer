@@ -60,6 +60,35 @@
 
   <div class="card">
     <div class="card-header">
+      <div class="card-title"><i class="fa-solid fa-chart-simple" style="color: var(--primary-green);"></i> Risk Profile</div>
+      <span class="card-description" style="margin: 0;">{{ total_clause_count }} flagged clause{{ '' if total_clause_count == 1 else 's' }} across your documents</span>
+    </div>
+    {% if total_clause_count %}
+      {% set severity_labels = [('High', 'High risk'), ('Medium', 'Medium risk'), ('Low', 'Low risk'), ('Review', 'Awaiting rating')] %}
+      <div class="risk-bar" role="img" aria-label="{% for key, label in severity_labels %}{{ label }}: {{ severity_counts[key] }}{{ ', ' if not loop.last }}{% endfor %}">
+        {% for key, label in severity_labels if severity_counts[key] %}
+          <span class="risk-bar-segment risk-{{ key | lower }}" style="flex-grow: {{ severity_counts[key] }};"
+                title="{{ label }}: {{ severity_counts[key] }}"></span>
+        {% endfor %}
+      </div>
+      <div class="risk-legend">
+        {% for key, label in severity_labels %}
+          <span class="risk-legend-item"><span class="risk-swatch risk-{{ key | lower }}"></span>{{ label }} <strong>{{ severity_counts[key] }}</strong>
+            <span class="risk-percent">({{ (100 * severity_counts[key] / total_clause_count) | round | int }}%)</span></span>
+        {% endfor %}
+      </div>
+      {% if top_high_risk_categories %}
+        <p class="risk-top-categories">Most common high-risk clause types:
+          {% for category, clause_count in top_high_risk_categories %}<strong>{{ category }}</strong> ({{ clause_count }}){{ ', ' if not loop.last }}{% endfor %}
+        </p>
+      {% endif %}
+    {% else %}
+      <p class="empty-state">No clauses flagged yet. Upload a contract to see its risk profile here.</p>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-header">
       <div class="card-title">Recent Activity</div>
     </div>
     <div class="table-scroll-wrapper">
