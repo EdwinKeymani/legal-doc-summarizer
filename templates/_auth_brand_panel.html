@@ -1,9 +1,13 @@
+{% import "_brand.html" as brand with context %}
 {# Left-hand panel shared by the sign-in, sign-up and password pages.
    The "contract" is decorative, so it is hidden from screen readers. #}
 <aside class="brand-panel">
   <div class="brand-top">
-    <span class="brand-mark" aria-hidden="true">&sect;</span>
-    Legal Tech Suite
+    {{ brand.mark(38) }}
+    <span class="brand-top-text">
+      {{ brand.wordmark() }}
+      <span class="brand-top-tagline">{{ brand_tagline }}</span>
+    </span>
   </div>
 
   <div class="legal-pad" aria-hidden="true">

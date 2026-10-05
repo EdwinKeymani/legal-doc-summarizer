@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}{{ document.file_name }} - Analysis{% endblock %}
+{% block title %}{{ document.file_name }} · {{ brand_name }}{% endblock %}
 
 {% block content %}
 
@@ -20,14 +20,17 @@
 
 {% if document.status == 'Processed' %}
 <div class="report-actions">
-  <a class="btn-secondary" href="{{ url_for('export_report', document_id=document.id, export_format='pdf') }}">
+  <a class="btn-secondary" href="{{ url_for('export_report', document_id=document.id, export_format='pdf') }}"
+     data-download-link data-loading-text="Preparing PDF...">
     <i class="fa-solid fa-file-pdf"></i> Export PDF
   </a>
-  <a class="btn-secondary" href="{{ url_for('export_report', document_id=document.id, export_format='docx') }}">
+  <a class="btn-secondary" href="{{ url_for('export_report', document_id=document.id, export_format='docx') }}"
+     data-download-link data-loading-text="Preparing Word file...">
     <i class="fa-solid fa-file-word"></i> Export Word
   </a>
   {% if original_file_available %}
-  <a class="btn-secondary" href="{{ url_for('download_document', document_id=document.id) }}">
+  <a class="btn-secondary" href="{{ url_for('download_document', document_id=document.id) }}"
+     data-download-link data-loading-text="Downloading...">
     <i class="fa-solid fa-download"></i> Download original
   </a>
   {% else %}
@@ -35,6 +38,15 @@
     <i class="fa-solid fa-download"></i> Original no longer on server
   </span>
   {% endif %}
+</div>
+{% endif %}
+
+{% if document.status == 'Processed' and not looks_like_contract %}
+<div class="inline-notice not-a-contract" role="note">
+  <strong>This doesn't look like a contract.</strong>
+  The summary is still useful, but clause flags, risk ratings and key provisions are designed for contracts
+  and may be patchy or irrelevant here.
+  <span class="signal-detail">Contract signals found: {{ contract_signals_met | length }} of 4{% if contract_signals_met %} ({{ contract_signals_met | join(', ') }}){% endif %}.</span>
 </div>
 {% endif %}
 
@@ -86,10 +98,9 @@
     </button>
     {% endif %}
     {% if clauses_pending_assessment %}
-    <form action="{{ url_for('reassess_document', document_id=document.id) }}" method="POST" style="margin: 0;"
-          onsubmit="this.querySelector('button').disabled = true; this.querySelector('button').textContent = 'Assessing...';">
+    <form action="{{ url_for('reassess_document', document_id=document.id) }}" method="POST" style="margin: 0;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <button type="submit" class="btn-secondary">
+      <button type="submit" class="btn-secondary" data-loading-text="Assessing clauses...">
         <i class="fa-solid fa-rotate-right"></i> Re-run risk assessment ({{ clauses_pending_assessment | length }})
       </button>
     </form>

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Dashboard - Legal Tech Suite{% endblock %}
+{% block title %}Dashboard · {{ brand_name }}{% endblock %}
 
 {% macro status_badge(status) -%}
   {% if status == 'Processed' %}
@@ -219,7 +219,7 @@
       <div id="upload-error" class="upload-error" role="alert" style="display: none;"></div>
     </div>
 
-    <button type="submit" class="btn-submit-analysis">
+    <button type="submit" class="btn-submit-analysis" data-loading-text="Analyzing...">
       <i class="fa-solid fa-microchip"></i> Process &amp; Analyze Document
     </button>
   </form>
@@ -278,19 +278,20 @@
     <div class="card-header">
       <div class="card-title"><i class="fa-solid fa-user" style="color: var(--primary-green);"></i> Profile</div>
     </div>
-    <form action="{{ url_for('update_profile') }}" method="POST" class="form-stack">
+    <form action="{{ url_for('update_profile') }}" method="POST" class="form-stack" data-validate>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="controls-grid two-columns">
         <div class="field-group">
           <label for="profile-full-name">Full Name</label>
-          <input type="text" id="profile-full-name" name="full_name" value="{{ user_name or '' }}" required>
+          <input type="text" id="profile-full-name" name="full_name" value="{{ user_name or '' }}" required
+                 maxlength="100" autocomplete="name" data-rule="name">
         </div>
         <div class="field-group">
           <label for="profile-email">Email</label>
           <input type="text" id="profile-email" value="{{ user_email or '' }}" readonly>
         </div>
       </div>
-      <div><button type="submit" class="btn-submit-analysis"><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></div>
+      <div><button type="submit" class="btn-submit-analysis" data-loading-text="Saving..."><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></div>
     </form>
   </div>
 
@@ -335,7 +336,7 @@
           <select id="default-context-hint" name="default_context_hint">{{ option_list(context_hint_options, preferences.default_context_hint) }}</select>
         </div>
       </div>
-      <button type="submit" class="btn-submit-analysis" style="margin-top: 20px;">
+      <button type="submit" class="btn-submit-analysis" style="margin-top: 20px;" data-loading-text="Saving...">
         <i class="fa-solid fa-floppy-disk"></i> Save Preferences
       </button>
     </div>
@@ -345,23 +346,31 @@
     <div class="card-header">
       <div class="card-title"><i class="fa-solid fa-lock" style="color: var(--primary-green);"></i> Change Password</div>
     </div>
-    <form action="{{ url_for('change_password') }}" method="POST" class="form-stack">
+    <form action="{{ url_for('change_password') }}" method="POST" class="form-stack" data-validate>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="field-group">
         <label for="current-password">Current Password</label>
-        <input type="password" id="current-password" name="current_password" required autocomplete="current-password">
+        <input type="password" id="current-password" name="current_password" required maxlength="128" autocomplete="current-password"
+               data-rule="required" data-required-message="Enter your current password.">
       </div>
       <div class="controls-grid two-columns">
         <div class="field-group">
           <label for="new-password">New Password</label>
-          <input type="password" id="new-password" name="new_password" required minlength="8" autocomplete="new-password">
+          <input type="password" id="new-password" name="new_password" required minlength="8" maxlength="128" autocomplete="new-password"
+                 data-rule="new-password" data-account-email="{{ (user_email or '') | lower }}" aria-describedby="new-password-rules">
+          <ul class="password-rules" id="new-password-rules" data-rules-for="new-password">
+            <li data-check="length">8+ characters</li>
+            <li data-check="letter">A letter</li>
+            <li data-check="number">A number</li>
+          </ul>
         </div>
         <div class="field-group">
           <label for="confirm-password">Confirm New Password</label>
-          <input type="password" id="confirm-password" name="confirm_password" required minlength="8" autocomplete="new-password">
+          <input type="password" id="confirm-password" name="confirm_password" required maxlength="128" autocomplete="new-password"
+                 data-rule="confirm-password" data-match="new-password">
         </div>
       </div>
-      <div><button type="submit" class="btn-submit-analysis"><i class="fa-solid fa-key"></i> Update Password</button></div>
+      <div><button type="submit" class="btn-submit-analysis" data-loading-text="Updating..."><i class="fa-solid fa-key"></i> Update Password</button></div>
     </form>
   </div>
 
@@ -592,8 +601,12 @@
     document.addEventListener('keydown', (event) => {
       if (event.key === 'Escape' && deleteModal.style.display === 'flex') closeDeleteModal();
     });
-    document.getElementById('delete-confirm-btn').addEventListener('click', () => {
-      if (formToDelete) formToDelete.submit();
+    document.getElementById('delete-confirm-btn').addEventListener('click', (event) => {
+      if (!formToDelete) return;
+      // form.submit() skips submit events, so set the loading state here
+      window.setButtonBusy(event.currentTarget, 'Deleting...');
+      document.getElementById('delete-cancel-btn').disabled = true;
+      formToDelete.submit();
     });
   });
 </script>

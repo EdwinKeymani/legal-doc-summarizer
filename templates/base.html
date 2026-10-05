@@ -1,14 +1,16 @@
+{% import "_brand.html" as brand with context %}
 <!DOCTYPE html>
 <html lang="en"{% if current_theme in ('light', 'dark') %} data-theme="{{ current_theme }}"{% endif %}>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="csrf-token" content="{{ csrf_token() }}">
-  <title>{% block title %}Legal Tech Suite{% endblock %}</title>
+  <title>{% block title %}{{ brand_name }}{% endblock %}</title>
+  {% include "_head_icons.html" %}
   {% include "_theme_init.html" %}
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='components.css') }}">
@@ -44,10 +46,10 @@
   <!-- Sidebar -->
   <aside class="sidebar">
     <div>
-      <div class="brand-logo">
-        <i class="fa-solid fa-scale-balanced"></i>
-        <span>Legal AI</span>
-      </div>
+      <a class="brand-logo" href="{{ url_for('dashboard') }}#dashboard" aria-label="{{ brand_name }} home">
+        {{ brand.mark(30) }}
+        {{ brand.wordmark() }}
+      </a>
 
       <ul class="nav-list">
         {# Real links: they work from every page. On the dashboard, JS        #}

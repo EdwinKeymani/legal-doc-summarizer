@@ -14,6 +14,7 @@ bullet, each with bold and italic runs) that both writers understand.
 """
 
 import io
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -47,6 +48,7 @@ class ReportContent:
     key_terms: dict                    # {term_type: [{"value", "context", "date"}]}
     notes: list = field(default_factory=list)
     generated_at: str = ""
+    brand_name: str = "Chambua"
 
 
 class _SummaryHtmlParser(HTMLParser):
@@ -133,7 +135,11 @@ def summary_html_to_blocks(safe_html):
     return parser.blocks
 
 
-def build_report_content(document, safe_summary_html, provision_groups, key_terms, risk_level_note=None):
+BRAND_LOGO_PNG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "brand", "logo-mark.png")
+
+
+def build_report_content(document, safe_summary_html, provision_groups, key_terms, risk_level_note=None,
+                         brand_name="Chambua"):
     """Collect everything both formats need from one document.
     provision_groups: [(type, description, [(party, [texts])])]"""
     analysis = document.analysis
@@ -173,6 +179,7 @@ def build_report_content(document, safe_summary_html, provision_groups, key_term
         key_terms=key_terms,
         notes=notes,
         generated_at=datetime.now(timezone.utc).strftime("%d %b %Y, %H:%M UTC"),
+        brand_name=brand_name,
     )
 
 
@@ -190,8 +197,21 @@ def export_docx(content):
     for section in word_document.sections:
         section.left_margin = section.right_margin = Cm(2.2)
         section.top_margin = section.bottom_margin = Cm(2)
+        # Header: logo mark + wordmark, on every page
+        header_paragraph = section.header.paragraphs[0]
+        if os.path.exists(BRAND_LOGO_PNG):
+            header_paragraph.add_run().add_picture(BRAND_LOGO_PNG, width=Cm(0.6))
+        name_run = header_paragraph.add_run("  " + content.brand_name.lower())
+        name_run.bold = True
+        name_run.font.size = Pt(12)
+        name_run.font.color.rgb = RGBColor(0x0F, 0x17, 0x2A)
+        dot_run = header_paragraph.add_run(".")
+        dot_run.bold = True
+        dot_run.font.size = Pt(12)
+        dot_run.font.color.rgb = RGBColor(0xDC, 0x26, 0x26)
+
         footer_paragraph = section.footer.paragraphs[0]
-        footer_paragraph.text = f"Legal AI report, generated {content.generated_at}. Informational only, not legal advice."
+        footer_paragraph.text = f"{content.brand_name} report, generated {content.generated_at}. Informational only, not legal advice."
         footer_paragraph.runs[0].font.size = Pt(8)
         footer_paragraph.runs[0].font.color.rgb = RGBColor(0x64, 0x74, 0x8B)
 
@@ -448,19 +468,55 @@ def export_pdf(content):
     else:
         story.append(Paragraph("No dates, deadlines, amounts or rates found.", styles["body"]))
 
-    def draw_footer(canvas, pdf_document):
+    def draw_brand_mark(canvas, left, top, size):
+        """The Chambua page-and-bars mark as vector shapes (same geometry as
+        the SVG logo, 64-unit grid, y flipped for PDF coordinates)."""
+        unit = size / 64.0
+        def point(x, y):
+            return left + x * unit, top - y * unit
         canvas.saveState()
+        canvas.setLineWidth(3.5 * unit)
+        canvas.setLineJoin(1)
+        canvas.setStrokeColor(colors.HexColor("#0F172A"))
+        canvas.setFillColor(colors.white)
+        page_outline = canvas.beginPath()
+        page_outline.moveTo(*point(14, 6)); page_outline.lineTo(*point(40, 6)); page_outline.lineTo(*point(52, 18))
+        page_outline.lineTo(*point(52, 56)); page_outline.lineTo(*point(48, 60)); page_outline.lineTo(*point(14, 60))
+        page_outline.lineTo(*point(10, 56)); page_outline.lineTo(*point(10, 10)); page_outline.close()
+        canvas.drawPath(page_outline, stroke=1, fill=1)
+        fold = canvas.beginPath()
+        fold.moveTo(*point(40, 6)); fold.lineTo(*point(40, 18)); fold.lineTo(*point(52, 18))
+        canvas.drawPath(fold, stroke=1, fill=0)
+        for x, y, width, colour in [(17, 25, 28, "#DC2626"), (17, 36, 22, "#D97706"), (17, 47, 26, "#16A34A")]:
+            canvas.setFillColor(colors.HexColor(colour))
+            bar_left, bar_top = point(x, y)
+            canvas.roundRect(bar_left, bar_top - 6 * unit, width * unit, 6 * unit, 3 * unit, stroke=0, fill=1)
+        canvas.restoreState()
+
+    def draw_page_frame(canvas, pdf_document):
+        canvas.saveState()
+        # Header: logo mark + wordmark
+        header_top = A4[1] - 0.9 * cm
+        draw_brand_mark(canvas, 2.2 * cm, header_top, 0.62 * cm)
+        canvas.setFont("Helvetica-Bold", 11)
+        canvas.setFillColor(ink)
+        wordmark = content.brand_name.lower()
+        text_left = 2.2 * cm + 0.8 * cm
+        canvas.drawString(text_left, header_top - 0.45 * cm, wordmark)
+        canvas.setFillColor(colors.HexColor("#DC2626"))
+        canvas.drawString(text_left + canvas.stringWidth(wordmark, "Helvetica-Bold", 11), header_top - 0.45 * cm, ".")
+        # Footer
         canvas.setFont("Helvetica", 7.5)
         canvas.setFillColor(muted)
-        canvas.drawString(2.2 * cm, 1.2 * cm, f"Legal AI report, generated {content.generated_at}. Informational only, not legal advice.")
+        canvas.drawString(2.2 * cm, 1.2 * cm, f"{content.brand_name} report, generated {content.generated_at}. Informational only, not legal advice.")
         canvas.drawRightString(A4[0] - 2.2 * cm, 1.2 * cm, f"Page {pdf_document.page}")
         canvas.restoreState()
 
     output = io.BytesIO()
     pdf_document = SimpleDocTemplate(output, pagesize=A4, leftMargin=2.2 * cm, rightMargin=2.2 * cm,
-                                     topMargin=2 * cm, bottomMargin=2 * cm,
-                                     title=f"Analysis report: {content.title}", author="Legal AI")
-    pdf_document.build(story, onFirstPage=draw_footer, onLaterPages=draw_footer)
+                                     topMargin=2.2 * cm, bottomMargin=2 * cm,
+                                     title=f"Analysis report: {content.title}", author=content.brand_name)
+    pdf_document.build(story, onFirstPage=draw_page_frame, onLaterPages=draw_page_frame)
     return output.getvalue()
 
 

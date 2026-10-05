@@ -1,5 +1,5 @@
 """
-Analysis layer for the Legal Document Summarizer (HYBRID version, Gemini).
+Analysis layer for Chambua (HYBRID version, Gemini).
 
 Design:
   - Text extraction and clause FINDING run locally (no cost, fast).

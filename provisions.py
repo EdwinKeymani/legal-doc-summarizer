@@ -355,3 +355,58 @@ def summarize_counts(provisions, key_terms):
         "provisions": {provision_type: len(items) for provision_type, items in provisions.items()},
         "key_terms": {term_type: len(items) for term_type, items in key_terms.items()},
     }
+
+
+# ---------------------------------------------------------------------------
+# Does this look like a contract?
+# ---------------------------------------------------------------------------
+# The clause rules, risk prompt and provision finder are designed for
+# contracts. Any document can be uploaded, so the report warns when the text
+# shows too few contract signals.
+#
+# Thresholds were measured, not guessed. On three real contracts versus six
+# other documents (lecture notes, a project proposal, reports, exam papers):
+#   party references per 1,000 words   contracts 38-59   others  0-5
+#   "shall"/"must" per 1,000 words     contracts 18-37   others  0-7
+#   different contract clause terms    contracts 5-8     others  0-4
+#   calls itself an agreement early    contracts always  others  never
+# Each threshold sits in the gap between the two groups; 3 of 4 must be met.
+# (Numbered clauses were tested and dropped: proposals and reports have them too.)
+CONTRACT_SIGNALS_REQUIRED = 3
+
+_AGREEMENT_TITLE = re.compile(
+    r"\b(agreement|contract|lease|tenancy|deed|memorandum\s+of\s+understanding|terms\s+(?:and|&)\s+conditions|"
+    r"letter\s+of\s+(?:offer|appointment)|non-disclosure)\b", re.I)
+_PARTY_REFERENCE = re.compile(
+    r"\b(the\s+parties|either\s+party|each\s+party|neither\s+party|both\s+parties|party\s+[A-B]|"
+    r"(?:the\s+)?(?:client|provider|supplier|landlord|tenant|lessor|lessee|employer|employee|licensor|licensee|"
+    r"buyer|seller|contractor|service\s+provider))\b", re.I)
+_CLAUSE_TERMS = {
+    "governing law": re.compile(r"\bgoverned\s+by|governing\s+law\b", re.I),
+    "termination": re.compile(r"\bterminat\w+", re.I),
+    "indemnity": re.compile(r"\bindemnif\w+|hold\s+harmless", re.I),
+    "confidentiality": re.compile(r"\bconfidential\w*", re.I),
+    "breach": re.compile(r"\bbreach\w*", re.I),
+    "liability": re.compile(r"\bliab(?:le|ility)\b", re.I),
+    "payment": re.compile(r"\b(?:invoice|payable|fees?)\b", re.I),
+    "boilerplate": re.compile(r"\bin\s+witness\s+whereof|hereinafter|force\s+majeure|entire\s+agreement", re.I),
+}
+
+
+def contract_signals(text):
+    """Return (looks_like_contract, signals_met). Pure counting, no AI."""
+    text = text or ""
+    words = max(1, len(text.split()))
+    per_thousand_words = lambda count: count / words * 1000
+    clause_terms_found = [name for name, pattern in _CLAUSE_TERMS.items() if pattern.search(text)]
+
+    signals_met = []
+    if _AGREEMENT_TITLE.search(text[:1500]):
+        signals_met.append("calls itself an agreement near the start")
+    if per_thousand_words(len(_PARTY_REFERENCE.findall(text))) >= 10:
+        signals_met.append("refers to the parties throughout")
+    if per_thousand_words(len(re.findall(r"\b(?:shall|must)\b", text, re.I))) >= 10:
+        signals_met.append("written as obligations (shall / must)")
+    if len(clause_terms_found) >= 5:
+        signals_met.append("contains typical contract clauses")
+    return len(signals_met) >= CONTRACT_SIGNALS_REQUIRED, signals_met

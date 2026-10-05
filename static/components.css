@@ -162,3 +162,55 @@
   .toast, .toast-leaving { animation: none; }
   .toast-progress { display: none; }
 }
+
+/* ---------- Loading state (busy buttons and links) ---------- */
+.is-busy { cursor: progress !important; pointer-events: none; opacity: 0.85; }
+.button-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+  vertical-align: -2px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: button-spin 0.7s linear infinite;
+}
+@keyframes button-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .button-spinner { animation-duration: 1.6s; }
+}
+
+/* ---------- Field validation ---------- */
+:root { --field-error: #b91c1c; --rule-met: #15803d; }
+:root[data-theme="dark"] { --field-error: #fca5a5; --rule-met: #4ade80; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --field-error: #fca5a5; --rule-met: #4ade80; }
+}
+
+.field-error {
+  color: var(--field-error);
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 6px;
+}
+.field-error:empty { display: none; }
+
+input[aria-invalid="true"] {
+  border-color: var(--field-error) !important;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.15) !important;
+}
+
+.password-rules {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin: 8px 0 0;
+  padding: 0;
+  font-size: 12px;
+  color: var(--toast-muted);
+}
+.password-rules li::before { content: "\25CB"; margin-right: 6px; } /* empty circle */
+.password-rules li.met { color: var(--rule-met); }
+.password-rules li.met::before { content: "\2713"; }               /* tick */

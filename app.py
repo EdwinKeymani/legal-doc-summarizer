@@ -1,6 +1,7 @@
 
 """
-Legal Document Summarizer - Backend POC
+Chambua - contract summaries, risky clauses and key terms.
+Web-Based Automated Legal Document Summary & Insights Tool (diploma project).
 Single-file Flask application.
 
 Run with:  python app.py
@@ -9,6 +10,7 @@ Then open: http://127.0.0.1:5000
 
 import io
 import os
+import re
 import time
 import secrets
 from datetime import datetime, timezone, timedelta
@@ -48,6 +50,10 @@ STALE_PROCESSING_MINUTES = 10
 # Only show password-reset links on screen during local development.
 # On Render this stays off, so the link is only written to the server log.
 SHOW_RESET_LINK_ON_SCREEN = os.environ.get("SHOW_RESET_LINK") == "1"
+
+# Brand: change the name here and it changes on every page, title and report
+BRAND_NAME = "Chambua"
+BRAND_TAGLINE = "Contracts, broken down."
 
 # Single source of truth for every choice the UI offers. Templates build their
 # dropdowns from these lists, and submitted values are checked against them.
@@ -249,6 +255,11 @@ def extract_text_from_document(file_path, file_format):
 
 
 @app.context_processor
+def inject_brand():
+    return {"brand_name": BRAND_NAME, "brand_tagline": BRAND_TAGLINE}
+
+
+@app.context_processor
 def inject_theme():
     """Logged-in pages get the saved theme from the session. Logged-out pages
     get an empty value, and the browser falls back to the last theme it saw."""
@@ -267,6 +278,58 @@ def inject_user_initials():
     else:
         initials = name[:2]
     return {"user_initials": initials.upper()}
+
+
+# ---------------------------------------------------------------------------
+# Input validation (server side; the browser checks are only a convenience)
+# ---------------------------------------------------------------------------
+EMAIL_MAX_LENGTH = 254          # RFC 5321 limit for a full address
+PASSWORD_MIN_LENGTH = 8
+PASSWORD_MAX_LENGTH = 128       # long enough for passphrases; stops multi-megabyte inputs
+FULL_NAME_MAX_LENGTH = 100
+
+# Pragmatic shape check: something@domain.tld, no spaces. (Fully validating an
+# address is impossible without emailing it; this catches typos.)
+EMAIL_PATTERN = re.compile(r"^[A-Za-z0-9._%+'-]+@[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,}$")
+
+
+def normalize_email(raw_email):
+    return (raw_email or "").strip().lower()
+
+
+def email_error(email):
+    """Return an error message for an already-normalized email, or None."""
+    if not email:
+        return "Enter your email address."
+    if len(email) > EMAIL_MAX_LENGTH or not EMAIL_PATTERN.match(email) or ".." in email:
+        return "Enter a valid email address, like name@example.com."
+    return None
+
+
+def new_password_error(password, email=None):
+    """Rules for any NEW password (register, reset, change). Existing
+    passwords are never re-checked, so older accounts can still sign in."""
+    if not password:
+        return "Enter a password."
+    if len(password) < PASSWORD_MIN_LENGTH:
+        return f"Password must be at least {PASSWORD_MIN_LENGTH} characters."
+    if len(password) > PASSWORD_MAX_LENGTH:
+        return f"Password must be at most {PASSWORD_MAX_LENGTH} characters."
+    if not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
+        return "Password must include at least one letter and one number."
+    if email and password.lower() in (email, email.split("@")[0]):
+        return "Password must not be your email address."
+    return None
+
+
+def full_name_error(full_name):
+    if not full_name:
+        return "Enter your full name."
+    if len(full_name) < 2 or not re.search(r"[^\W\d_]", full_name):
+        return "Enter your name using letters."
+    if len(full_name) > FULL_NAME_MAX_LENGTH:
+        return f"Name must be at most {FULL_NAME_MAX_LENGTH} characters."
+    return None
 
 
 def pick_option(submitted_value, allowed_options, fallback=None):
@@ -331,6 +394,20 @@ def build_provision_view(document):
     return sections, extract_key_terms(stored_text), True
 
 
+DOWNLOAD_TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9]{8,40}$")
+
+
+def attach_download_token(response):
+    """Downloads never leave the page, so the browser cannot tell when the file
+    has arrived. The button sends ?download_token=<random>; echoing it back as a
+    short-lived cookie with the file lets ui.js stop the spinner at that moment."""
+    download_token = request.args.get("download_token", "")
+    if DOWNLOAD_TOKEN_PATTERN.match(download_token):
+        response.set_cookie("download_token", download_token, max_age=60, samesite="Lax",
+                            secure=app.config["SESSION_COOKIE_SECURE"])
+    return response
+
+
 def original_file_exists(document):
     """Render's free tier wipes uploads/ on every restart, so the original
     file can be gone even though its analysis (in the database) is fine."""
@@ -388,12 +465,16 @@ def index():
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
+        email = normalize_email(request.form.get("email"))
         password = request.form.get("password", "")
+
+        if email_error(email) or not password or len(password) > PASSWORD_MAX_LENGTH:
+            # Same wording as a wrong password: never reveal which part failed
+            flash("Invalid email or password.")
+            return render_template("login.html", form_values={"email": email}), 400
 
         user = User.query.filter_by(email=email).first()
 
-        # Update this block here
         if user and check_password_hash(user.password_hash, password):
             session.clear()
             # Ticked: stay signed in for REMEMBER_ME_DAYS. Unticked: signed out
@@ -406,30 +487,37 @@ def login():
             return redirect(url_for("dashboard"))
 
         flash("Invalid email or password.")
-        return redirect(url_for("login"))
+        # Re-show the form with the email kept, so only the password is retyped
+        return render_template("login.html", form_values={"email": email}), 401
 
-    return render_template("login.html")
+    return render_template("login.html", form_values={})
 
 
 
 @app.route("/register", methods=["GET", "POST"])
 def register():
     if request.method == "POST":
-        full_name = request.form.get("full_name", "").strip()
-        email = request.form.get("email", "").strip().lower()
+        full_name = re.sub(r"\s+", " ", request.form.get("full_name", "")).strip()
+        email = normalize_email(request.form.get("email"))
         password = request.form.get("password", "")
 
-        if not full_name or not email or not password:
-            flash("All fields are required.")
-            return redirect(url_for("register"))
+        field_errors = {
+            "full_name": full_name_error(full_name),
+            "email": email_error(email),
+            "password": new_password_error(password, email),
+        }
+        if not field_errors["email"] and User.query.filter_by(email=email).first():
+            field_errors["email"] = "An account with that email already exists. Sign in instead?"
+        field_errors = {field: message for field, message in field_errors.items() if message}
 
-        if len(password) < 8:
-            flash("Password must be at least 8 characters.")
-            return redirect(url_for("register"))
-
-        if User.query.filter_by(email=email).first():
-            flash("An account with that email already exists.")
-            return redirect(url_for("register"))
+        if field_errors:
+            # Re-show the form with the name and email kept and each problem
+            # shown under its field (the password is never echoed back)
+            return render_template(
+                "register.html",
+                form_values={"full_name": full_name, "email": email},
+                field_errors=field_errors,
+            ), 400
 
         try:
             new_user = User(
@@ -451,9 +539,10 @@ def register():
             database.session.rollback()  # Prevents thread locking or stale transactions
             flash("An error occurred while creating your account. Please try again.")
             print(f"Registration DB Error: {e}")  # Logs error directly to Render console
-            return redirect(url_for("register"))
+            return render_template("register.html", form_values={"full_name": full_name, "email": email},
+                                   field_errors={}), 500
 
-    return render_template("register.html")
+    return render_template("register.html", form_values={}, field_errors={})
 @app.route("/logout")
 def logout():
     session.clear()
@@ -554,16 +643,16 @@ def upload_document():
 
     if not uploaded_file or uploaded_file.filename == "":
         flash("No file was selected.")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("dashboard") + "#analyzer")
 
     if not is_allowed_file(uploaded_file.filename):
         flash("Unsupported file type. Upload a PDF, DOCX, or TXT file.")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("dashboard") + "#analyzer")
 
     original_name = secure_filename(uploaded_file.filename)
     if not original_name:
         flash("Invalid file name.")
-        return redirect(url_for("dashboard"))
+        return redirect(url_for("dashboard") + "#analyzer")
 
     file_format = original_name.rsplit(".", 1)[1].lower()
     stored_name = f"{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}_{original_name}"
@@ -636,7 +725,7 @@ def upload_document():
         if assessment_failed:
             flash(
                 f"'{original_name}' was summarized, but the AI risk assessment is temporarily "
-                "unavailable. Open the report and use 'Re-run risk assessment' in a moment."
+                "unavailable. Use 'Re-run risk assessment' below in a moment."
             )
         else:
             flash(f"'{original_name}' processed successfully.", "success")
@@ -649,9 +738,11 @@ def upload_document():
         new_document.analysis = analysis_record
         database.session.add(new_document)
         database.session.commit()
-        flash(f"'{original_name}' could not be processed: {exc}")
+        flash(f"'{original_name}' could not be processed. The reason is shown below.")
 
-    return redirect(url_for("dashboard"))
+    # Go straight to this document's results (or its failure reason), instead
+    # of the dashboard where the user had to find it in Recent Activity.
+    return redirect(url_for("view_document", document_id=new_document.id))
 
 
 @app.route("/document/<int:document_id>")
@@ -677,6 +768,11 @@ def view_document(document_id):
 
     provision_sections, key_terms, provisions_available = build_provision_view(document)
 
+    # Any file can be uploaded, but the clause and provision rules are built for
+    # contracts; warn when the text does not look like one.
+    stored_text = document.analysis.extracted_text if document.analysis else None
+    looks_like_contract, contract_signals_met = contract_signals(stored_text) if stored_text else (True, [])
+
     return render_template(
         "document_detail.html",
         document=document,
@@ -690,6 +786,8 @@ def view_document(document_id):
         key_terms=key_terms,
         provisions_available=provisions_available,
         original_file_available=original_file_exists(document),
+        looks_like_contract=looks_like_contract,
+        contract_signals_met=contract_signals_met,
     )
 
 
@@ -722,7 +820,8 @@ def export_report(document_id, export_format):
         if chosen_risk_level and chosen_risk_level != "All Clauses" else None
     )
     content = build_report_content(
-        document, render_markdown_filter(document.summary_text), provision_sections, key_terms, risk_level_note
+        document, render_markdown_filter(document.summary_text), provision_sections, key_terms, risk_level_note,
+        brand_name=BRAND_NAME,
     )
 
     try:
@@ -733,21 +832,22 @@ def export_report(document_id, export_format):
         return redirect(url_for("view_document", document_id=document.id))
 
     mime_type, extension = EXPORT_FORMATS[export_format]
-    return send_file(
+    return attach_download_token(send_file(
         io.BytesIO(file_bytes),
         mimetype=mime_type,
         as_attachment=True,
         download_name=report_filename(document.file_name, extension),
-    )
+    ))
 
 
 @app.route("/settings/profile", methods=["POST"])
 @login_required
 def update_profile():
-    full_name = request.form.get("full_name", "").strip()
+    full_name = re.sub(r"\s+", " ", request.form.get("full_name", "")).strip()
 
-    if not full_name:
-        flash("Full name cannot be empty.")
+    name_problem = full_name_error(full_name)
+    if name_problem:
+        flash(name_problem)
         return redirect(url_for("dashboard") + "#settings")
 
     user = database.session.get(User, session["user_id"])
@@ -773,8 +873,13 @@ def change_password():
         flash("Current password is incorrect.")
         return redirect(url_for("dashboard") + "#settings")
 
-    if len(new_password) < 8:
-        flash("New password must be at least 8 characters.")
+    password_problem = new_password_error(new_password, user.email)
+    if password_problem:
+        flash(password_problem)
+        return redirect(url_for("dashboard") + "#settings")
+
+    if new_password == current_password:
+        flash("The new password must be different from the current one.")
         return redirect(url_for("dashboard") + "#settings")
 
     if new_password != confirm_password:
@@ -837,7 +942,14 @@ def upload_too_large(error):
 @app.route("/forgot-password", methods=["GET", "POST"])
 def forgot_password():
     if request.method == "POST":
-        email = request.form.get("email", "").strip().lower()
+        email = normalize_email(request.form.get("email"))
+
+        format_problem = email_error(email)
+        if format_problem:
+            # A format problem says nothing about whether an account exists
+            flash(format_problem)
+            return render_template("forgot_password.html", form_values={"email": email}), 400
+
         user = User.query.filter_by(email=email).first()
 
         generic_message = "If an account with that email exists, a reset link has been generated."
@@ -863,7 +975,7 @@ def forgot_password():
 
         return redirect(url_for("forgot_password"))
 
-    return render_template("forgot_password.html")
+    return render_template("forgot_password.html", form_values={})
 
 
 @app.route("/reset-password/<token>", methods=["GET", "POST"])
@@ -878,8 +990,9 @@ def reset_password(token):
         new_password = request.form.get("new_password", "")
         confirm_password = request.form.get("confirm_password", "")
 
-        if len(new_password) < 8:
-            flash("Password must be at least 8 characters.")
+        password_problem = new_password_error(new_password, user.email)
+        if password_problem:
+            flash(password_problem)
             return redirect(url_for("reset_password", token=token))
 
         if new_password != confirm_password:
@@ -941,12 +1054,12 @@ def download_document(document_id):
         )
         return redirect(url_for("view_document", document_id=document.id))
 
-    return send_from_directory(
+    return attach_download_token(send_from_directory(
         app.config["UPLOAD_FOLDER"],
         document.stored_name,
         as_attachment=True,
         download_name=document.file_name,
-    )
+    ))
 
 
 @app.route("/document/<int:document_id>/reassess", methods=["POST"])
@@ -992,6 +1105,16 @@ def reassess_document(document_id):
     return redirect(url_for("view_document", document_id=document.id))
 
 
+@app.route("/favicon.ico")
+def favicon():
+    """Browsers request /favicon.ico on their own; serving it stops a 404
+    on every visit (previously visible in the Render logs)."""
+    return send_from_directory(
+        os.path.join(app.static_folder, "brand"), "favicon.ico",
+        mimetype="image/vnd.microsoft.icon", max_age=86400,
+    )
+
+
 @app.route("/health")
 def health_check():
     """Simple endpoint to confirm the server is awake and responding.
@@ -1003,6 +1126,7 @@ def health_check():
 from analysis import run_analysis, assess_risk_with_llm  # noqa: E402
 from provisions import (  # noqa: E402
     PROVISION_TYPES, PROVISION_PLURALS, PROVISION_DESCRIPTIONS, extract_provisions, extract_key_terms, group_by_party,
+    contract_signals,
 )
 from report_export import build_report_content, export_docx, export_pdf, report_filename  # noqa: E402
 

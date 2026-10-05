@@ -1,0 +1,21 @@
+{# Chambua brand: the single definition of the logo, used everywhere.
+   Usage:  {% import "_brand.html" as brand %}
+           {{ brand.mark(32) }}   {{ brand.wordmark() }}
+   The page outline and fill follow CSS variables, so the mark adapts to
+   light and dark themes; the three bars keep the app's risk colours. #}
+
+{% macro mark(size=32, decorative=true) -%}
+<svg class="brand-mark-svg" width="{{ size }}" height="{{ size }}" viewBox="0 0 64 64"
+     {% if decorative %}aria-hidden="true" focusable="false"{% else %}role="img" aria-label="{{ brand_name }}"{% endif %}>
+  <path d="M14 6h26l12 12v38a4 4 0 0 1-4 4H14a4 4 0 0 1-4-4V10a4 4 0 0 1 4-4z"
+        fill="var(--brand-page, #ffffff)" stroke="var(--brand-outline, #0f172a)" stroke-width="3.5" stroke-linejoin="round"/>
+  <path d="M40 6v12h12" fill="none" stroke="var(--brand-outline, #0f172a)" stroke-width="3.5" stroke-linejoin="round"/>
+  <rect x="17" y="25" width="28" height="6" rx="3" fill="#dc2626"/>
+  <rect x="17" y="36" width="22" height="6" rx="3" fill="#d97706"/>
+  <rect x="17" y="47" width="26" height="6" rx="3" fill="#16a34a"/>
+</svg>
+{%- endmacro %}
+
+{% macro wordmark() -%}
+<span class="brand-wordmark">{{ brand_name | lower }}<span class="brand-dot" aria-hidden="true">.</span></span>
+{%- endmacro %}

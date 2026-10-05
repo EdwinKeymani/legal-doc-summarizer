@@ -1,5 +1,5 @@
 /* =========================================================================
-   Legal AI - application stylesheet
+   Chambua - application stylesheet
    Every colour is a variable, so light and dark themes are just two sets
    of values. Theme is chosen by <html data-theme="light|dark">; with no
    attribute ("System" setting) the operating system preference decides.
@@ -160,20 +160,34 @@ a { color: var(--primary-green); }
   transition: transform 0.25s ease, background-color 0.2s ease;
 }
 
+/* Brand: logo mark colours follow the theme; the bars keep risk colours */
+:root { --brand-page: #ffffff; --brand-outline: #0f172a; --brand-dot: #dc2626; }
+:root[data-theme="dark"] { --brand-page: #1e293b; --brand-outline: #e5e7eb; --brand-dot: #f87171; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --brand-page: #1e293b; --brand-outline: #e5e7eb; --brand-dot: #f87171; }
+}
+
 .brand-logo {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 18px;
-  font-weight: 700;
   color: var(--text-main);
   padding: 0 12px 24px 12px;
+  text-decoration: none;
 }
 
-.brand-logo i {
-  color: var(--primary-green);
+.brand-mark-svg { flex-shrink: 0; display: block; }
+
+.brand-wordmark {
+  font-family: 'Plus Jakarta Sans', sans-serif;
   font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.8px;
+  line-height: 1;
+  color: var(--text-main);
 }
+
+.brand-dot { color: var(--brand-dot); }
 
 .nav-list {
   list-style: none;
@@ -643,6 +657,9 @@ a { color: var(--primary-green); }
   padding: 10px 12px;
   margin-bottom: 14px;
 }
+
+.not-a-contract { margin-bottom: 20px; line-height: 1.55; }
+.not-a-contract .signal-detail { display: block; margin-top: 4px; font-size: 11.5px; opacity: 0.85; }
 
 .data-table tr.clause-hidden-by-level { display: none; }
 .data-table.show-all-clauses tr.clause-hidden-by-level { display: table-row; opacity: 0.75; }

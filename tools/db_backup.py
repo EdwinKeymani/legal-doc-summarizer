@@ -1,5 +1,8 @@
 """
-Back up and restore the Legal Document Summarizer database.
+Back up and restore the Chambua database.
+
+(The backup format identifier below still says "legal-doc-summarizer" on
+purpose: changing it would make existing backup files unreadable.)
 
 Works with any database the app supports (local SQLite, Render Postgres,
 Neon Postgres) because it goes through the app's own models. Needs only the
