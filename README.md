@@ -1,6 +1,4 @@
-# Chambua
-
-**Contracts, broken down.** Chambua (Swahili: *to analyse, to break down*) is the product name of the diploma project *Web-Based Automated Legal Document Summary & Insights Tool*.
+# Web-Based Automated Legal Document Summary & Insights Tool
 
 A Flask web application that reads contracts (PDF, Word or text) and produces:
 
@@ -64,8 +62,8 @@ Tables are created automatically on startup.
 | `provisions.py` | Rule-based obligations, rights, prohibitions, liabilities, dates and amounts |
 | `report_export.py` | PDF (ReportLab) and Word (python-docx) reports |
 | `tools/db_backup.py` | Back up or move the database between SQLite and PostgreSQL |
-| `templates/` | Jinja2 pages; `_*.html` files are shared partials (`_brand.html` holds the logo) |
-| `static/` | `styles.css` (app), `auth.css` (sign-in pages), `components.css` and `ui.js` (shared), `brand/` (favicons, app icons, logo) |
+| `templates/` | Jinja2 pages; `_*.html` files are shared partials |
+| `static/` | `styles.css` (app), `auth.css` (sign-in pages), `components.css` and `ui.js` (shared) |
 | `uploads/`, `legal.db` | Created at runtime, git-ignored |
 
 ## Useful commands
@@ -78,10 +76,6 @@ python tools/db_backup.py import backups/backup.json --database-url "<new url>"
 ```
 
 Backup files contain password hashes and document text. They are git-ignored; keep them private.
-
-## What documents it suits
-
-Any PDF, Word or text file can be uploaded, but the clause rules, risk ratings and provision finder are designed for **contracts in English** (service agreements, leases, employment contracts, NDAs). For other documents the report shows a "doesn't look like a contract" notice; the summary still works. Scanned PDFs need OCR first.
 
 ## Data and privacy
 
