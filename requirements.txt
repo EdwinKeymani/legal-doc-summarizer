@@ -4,6 +4,9 @@
 Flask==3.1.3
 Flask-SQLAlchemy==3.1.1
 SQLAlchemy==2.0.52
+# Database migrations (increment 7): versioned schema changes in migrations/
+Flask-Migrate==4.1.0
+alembic==1.20.0
 Flask-WTF==1.3.0
 WTForms==3.2.2
 Werkzeug==3.1.8

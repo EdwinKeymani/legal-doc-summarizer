@@ -1,0 +1,26 @@
+{% import "_brand.html" as brand with context %}
+<!DOCTYPE html>
+<html lang="en"{% if current_theme in ('light', 'dark') %} data-theme="{{ current_theme }}"{% endif %}>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Page not found · {{ brand_name }}</title>
+  {% include "_head_icons.html" %}
+  {% include "_theme_init.html" %}
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='components.css') }}">
+</head>
+<body class="plain-page">
+  {# Shown for anything missing AND for anything not allowed, on purpose:
+     the two look identical, so record IDs and admin pages can't be probed. #}
+  <main class="not-found-box">
+    <a class="brand-logo" href="{{ url_for('index') }}" aria-label="{{ brand_name }} home">{{ brand.mark(30) }}{{ brand.wordmark() }}</a>
+    <h1>Page not found</h1>
+    <p>This page doesn't exist, or your account doesn't have access to it.</p>
+    <a class="btn-submit-analysis" href="{{ url_for('dashboard') if current_user else url_for('login') }}">
+      {{ 'Back to your dashboard' if current_user else 'Go to sign in' }}
+    </a>
+  </main>
+</body>
+</html>

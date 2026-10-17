@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Review Queue · {{ brand_name }}{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Review Queue</h1>
+<p class="page-intro">Contracts the clinic coordinator assigns to you appear here, newest first.</p>
+
+<div class="card">
+  <div class="card-header">
+    <div class="card-title"><i class="fa-solid fa-list-check" style="color: var(--primary-green);"></i> Assigned to you</div>
+  </div>
+  <div class="empty-panel">
+    <i class="fa-regular fa-folder-open" aria-hidden="true"></i>
+    <p><strong>No reviews are assigned to you yet.</strong></p>
+    <p>When the coordinator assigns a contract, you'll be able to open its report, confirm or change each
+       clause's risk rating with a note, and complete the review.</p>
+  </div>
+</div>
+{% endblock %}

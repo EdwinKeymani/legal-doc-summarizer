@@ -1,0 +1,124 @@
+{# Settings window, opened from the account menu (or a #settings-<tab> link).
+   A native <dialog>: the browser keeps keyboard focus inside it and closes it
+   with Escape. Behaviour is in static/ui.js, section 6. #}
+{% macro settings_option_list(options, selected_value) -%}
+  {% for option in options %}
+    <option value="{{ option }}" {% if option == selected_value %}selected{% endif %}>{{ option }}</option>
+  {% endfor %}
+{%- endmacro %}
+
+<dialog class="settings-dialog" id="settings-dialog" aria-labelledby="settings-dialog-title">
+  <div class="settings-dialog-header">
+    <h2 id="settings-dialog-title">Settings</h2>
+    <button type="button" class="icon-button" data-close-settings aria-label="Close settings">
+      <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+    </button>
+  </div>
+
+  <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+    <button type="button" role="tab" id="settings-tab-profile" aria-controls="settings-panel-profile" data-settings-tab="profile">Profile</button>
+    <button type="button" role="tab" id="settings-tab-security" aria-controls="settings-panel-security" data-settings-tab="security">Security</button>
+    <button type="button" role="tab" id="settings-tab-appearance" aria-controls="settings-panel-appearance" data-settings-tab="appearance">Appearance</button>
+    {% if 'document.upload' in user_permissions %}
+    <button type="button" role="tab" id="settings-tab-defaults" aria-controls="settings-panel-defaults" data-settings-tab="defaults">Analysis defaults</button>
+    {% endif %}
+  </div>
+
+  <div class="settings-panels">
+    <section role="tabpanel" id="settings-panel-profile" aria-labelledby="settings-tab-profile" class="settings-panel">
+      <form action="{{ url_for('update_profile') }}" method="POST" class="form-stack" data-validate>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="return_to" value="{{ settings_return_path }}">
+        <div class="field-group">
+          <label for="profile-full-name">Full Name</label>
+          <input type="text" id="profile-full-name" name="full_name" value="{{ current_user.full_name }}" required
+                 maxlength="100" autocomplete="name" data-rule="name">
+        </div>
+        <div class="field-group">
+          <label for="profile-email">Email</label>
+          <input type="text" id="profile-email" value="{{ current_user.email }}" readonly>
+        </div>
+        <div class="field-group">
+          <label for="profile-role">Role</label>
+          <input type="text" id="profile-role" value="{{ current_user.role.label }}" readonly>
+          <p class="field-hint">Only an Administrator can change roles.</p>
+        </div>
+        <div><button type="submit" class="btn-submit-analysis" data-loading-text="Saving..."><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></div>
+      </form>
+    </section>
+
+    <section role="tabpanel" id="settings-panel-security" aria-labelledby="settings-tab-security" class="settings-panel" hidden>
+      <form action="{{ url_for('change_password') }}" method="POST" class="form-stack" data-validate>
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="return_to" value="{{ settings_return_path }}">
+        <div class="field-group">
+          <label for="current-password">Current Password</label>
+          <input type="password" id="current-password" name="current_password" required maxlength="128" autocomplete="current-password"
+                 data-rule="required" data-required-message="Enter your current password.">
+        </div>
+        <div class="field-group">
+          <label for="new-password">New Password</label>
+          <input type="password" id="new-password" name="new_password" required minlength="8" maxlength="128" autocomplete="new-password"
+                 data-rule="new-password" data-account-email="{{ current_user.email | lower }}" aria-describedby="new-password-rules">
+          <ul class="password-rules" id="new-password-rules" data-rules-for="new-password">
+            <li data-check="length">8+ characters</li>
+            <li data-check="letter">A letter</li>
+            <li data-check="number">A number</li>
+          </ul>
+        </div>
+        <div class="field-group">
+          <label for="confirm-password">Confirm New Password</label>
+          <input type="password" id="confirm-password" name="confirm_password" required maxlength="128" autocomplete="new-password"
+                 data-rule="confirm-password" data-match="new-password">
+        </div>
+        <div><button type="submit" class="btn-submit-analysis" data-loading-text="Updating..."><i class="fa-solid fa-key"></i> Update Password</button></div>
+      </form>
+    </section>
+
+    <section role="tabpanel" id="settings-panel-appearance" aria-labelledby="settings-tab-appearance" class="settings-panel" hidden>
+      <p class="card-description">Saved as soon as you pick one. "System" follows your device's light or dark setting.</p>
+      <div class="segmented-control" role="radiogroup" aria-label="Theme">
+        {% set theme_labels = {'system': ('fa-desktop', 'System'), 'light': ('fa-sun', 'Light'), 'dark': ('fa-moon', 'Dark')} %}
+        {% for theme_option in theme_options %}
+          <input type="radio" id="theme-{{ theme_option }}" name="theme" value="{{ theme_option }}"
+                 {% if preferences.theme == theme_option %}checked{% endif %}>
+          <label for="theme-{{ theme_option }}"><i class="fa-solid {{ theme_labels[theme_option][0] }}"></i> {{ theme_labels[theme_option][1] }}</label>
+        {% endfor %}
+      </div>
+    </section>
+
+    {% if 'document.upload' in user_permissions %}
+    <section role="tabpanel" id="settings-panel-defaults" aria-labelledby="settings-tab-defaults" class="settings-panel" hidden>
+      <form action="{{ url_for('update_preferences') }}" method="POST" class="form-stack">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="return_to" value="{{ settings_return_path }}">
+        <p class="card-description">Pre-selected in the Document Analyzer. You can still change them per upload.</p>
+        <div class="controls-grid two-columns">
+          <div class="field-group">
+            <label for="default-summary-depth">Summary Depth</label>
+            <select id="default-summary-depth" name="default_summary_depth">{{ settings_option_list(summary_depth_options, preferences.default_summary_depth) }}</select>
+          </div>
+          <div class="field-group">
+            <label for="default-extraction-mode">Extraction Mode</label>
+            <select id="default-extraction-mode" name="default_extraction_mode">{{ settings_option_list(extraction_mode_options, preferences.default_extraction_mode) }}</select>
+          </div>
+          <div class="field-group">
+            <label for="default-risk-level">Risk Detection Level</label>
+            <select id="default-risk-level" name="default_risk_level">{{ settings_option_list(risk_level_options, preferences.default_risk_level) }}</select>
+          </div>
+          <div class="field-group">
+            <label for="default-context-hint">Context Hint</label>
+            <select id="default-context-hint" name="default_context_hint">{{ settings_option_list(context_hint_options, preferences.default_context_hint) }}</select>
+          </div>
+        </div>
+        <p class="settings-note">
+          <i class="fa-solid fa-robot" aria-hidden="true"></i>
+          Abstractive summaries and risk ratings use Google Gemini: document text is sent to Google for these two
+          steps only. Extractive summaries run entirely on this server.
+        </p>
+        <div><button type="submit" class="btn-submit-analysis" data-loading-text="Saving..."><i class="fa-solid fa-floppy-disk"></i> Save Preferences</button></div>
+      </form>
+    </section>
+    {% endif %}
+  </div>
+</dialog>

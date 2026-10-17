@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% import "_pagination.html" as pagination with context %}
+{% block title %}Users · {{ brand_name }}{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Users</h1>
+<p class="page-intro">Everyone who registers starts as a Member. Make clinic staff Reviewers or Administrators here.
+  Changes apply from the person's next click.</p>
+
+<form class="filter-bar card" method="GET" action="{{ url_for('admin_users') }}" role="search" data-no-busy>
+  <div class="field-group">
+    <label for="user-search">Name or email</label>
+    <input type="search" id="user-search" name="q" value="{{ search_text }}" maxlength="120" placeholder="e.g. Jane or @example.com">
+  </div>
+  <div class="field-group">
+    <label for="user-role-filter">Role</label>
+    <select id="user-role-filter" name="role">
+      <option value="">All roles</option>
+      {% for role in roles %}<option value="{{ role.name }}" {% if role_filter == role.name %}selected{% endif %}>{{ role.label }}s</option>{% endfor %}
+    </select>
+  </div>
+  <div class="filter-actions">
+    <button type="submit" class="btn-submit-analysis"><i class="fa-solid fa-magnifying-glass"></i> Search</button>
+    {% if search_text or role_filter %}<a class="text-link" href="{{ url_for('admin_users') }}">Clear</a>{% endif %}
+  </div>
+</form>
+
+<div class="card">
+  <div class="table-scroll-wrapper">
+    <table class="data-table users-table">
+      <thead>
+        <tr><th>Person</th><th>Role</th><th>Status</th><th><span class="sr-only">Actions</span></th></tr>
+      </thead>
+      <tbody>
+        {% for person in users_page.items %}
+        {% set is_self = person.id == current_user.id %}
+        <tr class="{{ 'row-inactive' if not person.is_active }}">
+          <td>
+            <div class="person-cell">
+              <span><strong>{{ person.full_name }}</strong>{% if is_self %} <span class="you-tag">You</span>{% endif %}</span>
+              <span class="audit-subtle">{{ person.email }}</span>
+            </div>
+          </td>
+          <td>
+            {% if can_change_roles and not is_self %}
+            <form class="inline-role-form" method="POST" action="{{ url_for('admin_change_role', user_id=person.id) }}"
+                  data-confirm="Change {{ person.full_name }}'s role? Their access changes from their next click."
+                  data-confirm-button="Change role">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <label class="sr-only" for="role-for-{{ person.id }}">Role for {{ person.full_name }}</label>
+              <select id="role-for-{{ person.id }}" name="role">
+                {% for role in roles %}<option value="{{ role.name }}" {% if role.id == person.role_id %}selected{% endif %}>{{ role.label }}</option>{% endfor %}
+              </select>
+              <button type="submit" class="btn-secondary btn-small" data-loading-text="Saving...">Save</button>
+            </form>
+            {% else %}
+              <span class="role-badge role-{{ person.role.name }}">{{ person.role.label }}</span>
+              {% if is_self %}<span class="audit-subtle">Another Administrator can change this</span>{% endif %}
+            {% endif %}
+          </td>
+          <td>
+            {% if person.is_active %}<span class="status-badge status-low">Active</span>
+            {% else %}<span class="status-badge status-high">Deactivated</span>{% endif %}
+          </td>
+          <td class="actions-cell">
+            {% if can_deactivate and not is_self %}
+            <form method="POST" action="{{ url_for('admin_change_status', user_id=person.id) }}"
+                  {% if person.is_active %}data-confirm="Deactivate {{ person.full_name }}? They are signed out and can't sign in until restored. Their documents and history are kept." data-confirm-button="Deactivate"{% endif %}>
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="return_to" value="{{ return_to }}">
+              <input type="hidden" name="action" value="{{ 'deactivate' if person.is_active else 'restore' }}">
+              <button type="submit" class="link-button {{ 'link-danger' if person.is_active }}"
+                      data-loading-text="{{ 'Deactivating...' if person.is_active else 'Restoring...' }}">
+                {{ 'Deactivate' if person.is_active else 'Restore' }}
+              </button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty-state">No accounts match.{% if search_text or role_filter %} <a class="text-link" href="{{ url_for('admin_users') }}">Show everyone</a>{% endif %}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {{ pagination.pager(users_page, 'admin_users', 'accounts') }}
+</div>
+{% endblock %}

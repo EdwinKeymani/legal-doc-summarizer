@@ -1,0 +1,22 @@
+{# One audit entry's actor and details, shared by the Overview and the Audit Log. #}
+{% macro actor(entry) -%}
+  {% if entry.actor %}
+    <span class="audit-actor">{{ entry.actor.full_name }}</span>
+    <span class="audit-subtle">{{ entry.actor.email }}</span>
+  {% else %}
+    <span class="audit-subtle">{{ 'System' if entry.action in ('user.role_changed', 'audit.pruned') else 'Not signed in' }}</span>
+  {% endif %}
+{%- endmacro %}
+
+{% macro details(entry) -%}
+  {% set entry_details = entry.details_dict %}
+  {% if entry_details %}
+    <dl class="audit-details">
+      {% for key, value in entry_details.items() %}
+        <div><dt>{{ key | replace('_', ' ') }}</dt><dd>{{ value }}</dd></div>
+      {% endfor %}
+    </dl>
+  {% elif entry.target_type %}
+    <span class="audit-subtle">{{ entry.target_type }} {{ entry.target_id }}</span>
+  {% endif %}
+{%- endmacro %}

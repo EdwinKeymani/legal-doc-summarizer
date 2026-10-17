@@ -1,6 +1,6 @@
 {% import "_brand.html" as brand with context %}
 <!DOCTYPE html>
-<html lang="en"{% if current_theme in ('light', 'dark') %} data-theme="{{ current_theme }}"{% endif %}>
+<html lang="en"{% if current_theme in ('light', 'dark') %} data-theme="{{ current_theme }}"{% endif %} data-sidebar="{{ 'collapsed' if sidebar_collapsed else 'expanded' }}">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -17,10 +17,11 @@
   <script src="{{ url_for('static', filename='ui.js') }}" defer></script>
 </head>
 <body>
+  {# Inline SVG icons: they work even if the icon font fails to load #}
+  {% set icon_panel_close %}<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="9" y1="4" x2="9" y2="20"/><path d="M16 15l-3-3 3-3"/></svg>{% endset %}
+  {% set icon_panel_open %}<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2.5"/><line x1="9" y1="4" x2="9" y2="20"/><path d="M14 9l3 3-3 3"/></svg>{% endset %}
 
-  <button class="menu-toggle-btn" id="menu-toggle" aria-label="Open menu" aria-expanded="false">
-    <i class="fa-solid fa-bars"></i>
-  </button>
+  <a class="skip-link" href="#main-content">Skip to content</a>
 
   <div class="mobile-overlay" id="mobile-overlay"></div>
 
@@ -43,90 +44,152 @@
     </div>
   </div>
 
-  <!-- Sidebar -->
-  <aside class="sidebar">
-    <div>
-      <a class="brand-logo" href="{{ url_for('dashboard') }}#dashboard" aria-label="{{ brand_name }} home">
+  <!-- Sidebar: open, collapsed to icons (desktop), or a slide-in drawer (phones) -->
+  <aside class="sidebar" id="app-sidebar" aria-label="Main navigation">
+    <div class="sidebar-top">
+      <a class="brand-logo" href="{{ url_for('dashboard') }}" aria-label="{{ brand_name }} home">
         {{ brand.mark(30) }}
-        {{ brand.wordmark() }}
+        <span class="sidebar-brand-text">{{ brand.wordmark() }}</span>
       </a>
-
-      <ul class="nav-list">
-        {# Real links: they work from every page. On the dashboard, JS        #}
-        {# intercepts them and switches tabs without reloading.             #}
-        <li class="nav-item {% if active_view == 'dashboard' %}active{% endif %}" data-view="dashboard-view">
-          <a class="nav-link" href="{{ url_for('dashboard') }}#dashboard"><i class="fa-solid fa-house"></i> Dashboard</a>
-        </li>
-        <li class="nav-item {% if active_view == 'analyzer' %}active{% endif %}" data-view="analyzer-view">
-          <a class="nav-link" href="{{ url_for('dashboard') }}#analyzer"><i class="fa-solid fa-file-contract"></i> Document Analyzer</a>
-        </li>
-        <li class="nav-item {% if active_view == 'documents' %}active{% endif %}" data-view="documents-view">
-          <a class="nav-link" href="{{ url_for('dashboard') }}#documents"><i class="fa-solid fa-folder-open"></i> My Documents</a>
-        </li>
-        <li class="nav-item {% if active_view == 'settings' %}active{% endif %}" data-view="settings-view">
-          <a class="nav-link" href="{{ url_for('dashboard') }}#settings"><i class="fa-solid fa-gear"></i> Settings</a>
-        </li>
-      </ul>
+      <button type="button" class="sidebar-toggle" id="sidebar-toggle" aria-controls="app-sidebar"
+              aria-expanded="{{ 'false' if sidebar_collapsed else 'true' }}"
+              aria-label="{{ 'Expand sidebar' if sidebar_collapsed else 'Collapse sidebar' }}"
+              title="{{ 'Expand sidebar' if sidebar_collapsed else 'Collapse sidebar' }}">
+        <span class="toggle-icon-close">{{ icon_panel_close }}</span>
+        <span class="toggle-icon-open">{{ icon_panel_open }}</span>
+      </button>
     </div>
 
-    <div class="sidebar-footer">
-      <div class="user-profile">
-        <div class="user-info">
-          <div class="avatar">{{ user_initials }}</div>
-          <div class="user-details">
-            <h4 title="{{ user_name or 'User' }}">{{ user_name or 'User' }}</h4>
-          </div>
-        </div>
-        <div class="sidebar-actions">
-          <button type="button" class="icon-button" id="theme-quick-toggle" title="Switch light / dark mode" aria-label="Switch light or dark mode">
-            <i class="fa-solid fa-moon theme-icon-dark"></i>
-            <i class="fa-solid fa-sun theme-icon-light"></i>
-          </button>
-          <a href="{{ url_for('logout') }}" class="icon-button" title="Log out" aria-label="Log out">
-            <i class="fa-solid fa-right-from-bracket"></i>
-          </a>
-        </div>
-      </div>
-    </div>
+    <ul class="nav-list">
+      {# Built from the signed-in person's permissions (see NAVIGATION_ITEMS). #}
+      {# Dashboard tabs are real links; on the dashboard, JS switches tabs.  #}
+      {% for item in navigation_items %}
+      <li class="nav-item {% if active_view == item.key %}active{% endif %}"{% if item.tab_view %} data-view="{{ item.tab_view }}"{% endif %}>
+        <a class="nav-link" href="{{ item.url }}" data-label="{{ item.label }}"{% if active_view == item.key %} aria-current="page"{% endif %}>
+          <i class="fa-solid {{ item.icon }}" aria-hidden="true"></i>
+          <span class="nav-label">{{ item.label }}</span>
+        </a>
+      </li>
+      {% endfor %}
+    </ul>
   </aside>
 
   <!-- Main Panel Wrapper -->
-  <main class="main-wrapper">
+  <main class="main-wrapper" id="main-content" tabindex="-1">
+    <header class="top-bar">
+      <button type="button" class="icon-button top-bar-menu" id="mobile-menu-button" aria-controls="app-sidebar"
+              aria-expanded="false" aria-label="Open navigation">{{ icon_panel_open }}</button>
+      <div class="top-bar-spacer"></div>
+      <button type="button" class="icon-button" id="theme-quick-toggle" title="Switch light / dark mode" aria-label="Switch light or dark mode">
+        <i class="fa-solid fa-moon theme-icon-dark"></i>
+        <i class="fa-solid fa-sun theme-icon-light"></i>
+      </button>
+      {% if current_user %}
+      <div class="account-menu-wrapper">
+        <button type="button" class="account-button" id="account-button" aria-haspopup="menu"
+                aria-expanded="false" aria-controls="account-menu" title="Account">
+          <span class="avatar" style="--avatar-hue: {{ avatar_hue }};" aria-hidden="true">{{ user_initials }}</span>
+          <span class="sr-only">Account menu for {{ current_user.full_name }}</span>
+        </button>
+        <div class="account-menu" id="account-menu" role="menu" aria-labelledby="account-button" hidden>
+          <div class="account-menu-header">
+            <span class="avatar avatar-large" style="--avatar-hue: {{ avatar_hue }};" aria-hidden="true">{{ user_initials }}</span>
+            <div class="account-menu-identity">
+              <strong title="{{ current_user.full_name }}">{{ current_user.full_name }}</strong>
+              <span title="{{ current_user.email }}">{{ current_user.email }}</span>
+              <span class="role-badge role-{{ current_user.role.name }}">{{ current_user.role.label }}</span>
+            </div>
+          </div>
+          <div class="account-menu-items">
+            <button type="button" role="menuitem" class="account-menu-item" data-open-settings="profile"><i class="fa-solid fa-user" aria-hidden="true"></i> Profile</button>
+            <button type="button" role="menuitem" class="account-menu-item" data-open-settings="security"><i class="fa-solid fa-lock" aria-hidden="true"></i> Security</button>
+            <button type="button" role="menuitem" class="account-menu-item" data-open-settings="appearance"><i class="fa-solid fa-palette" aria-hidden="true"></i> Appearance</button>
+            {% if 'document.upload' in user_permissions %}
+            <button type="button" role="menuitem" class="account-menu-item" data-open-settings="defaults"><i class="fa-solid fa-sliders" aria-hidden="true"></i> Analysis defaults</button>
+            {% endif %}
+          </div>
+          <div class="account-menu-items account-menu-footer">
+            <a role="menuitem" class="account-menu-item" href="{{ url_for('logout') }}"><i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i> Sign out</a>
+          </div>
+        </div>
+      </div>
+      {% endif %}
+    </header>
+
     {% include "_flash_messages.html" %}
     {% block content %}{% endblock %}
   </main>
+
+  {% if current_user %}{% include "_settings_dialog.html" %}{% endif %}
+
+  <dialog class="confirm-dialog" id="confirm-dialog" aria-labelledby="confirm-dialog-title">
+    <h3 id="confirm-dialog-title">Are you sure?</h3>
+    <p id="confirm-dialog-text"></p>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="confirm-dialog-cancel">Cancel</button>
+      <button type="button" class="btn-danger" id="confirm-dialog-confirm">Confirm</button>
+    </div>
+  </dialog>
 
   <script>
     document.addEventListener("DOMContentLoaded", () => {
       const rootElement = document.documentElement;
       const body = document.body;
+      const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
 
-      /* ---------- Mobile drawer ---------- */
-      const menuToggle = document.getElementById("menu-toggle");
+      /* ---------- Sidebar: collapse (desktop) and drawer (phones) ---------- */
+      const sidebar = document.getElementById("app-sidebar");
+      const sidebarToggle = document.getElementById("sidebar-toggle");
+      const mobileMenuButton = document.getElementById("mobile-menu-button");
       const overlay = document.getElementById("mobile-overlay");
       const smallScreenQuery = window.matchMedia("(max-width: 900px)");
 
-      function setSidebarOpen(isOpen) {
-        body.classList.toggle("sidebar-open", isOpen);
-        overlay.classList.toggle("active", isOpen && smallScreenQuery.matches);
-        menuToggle.setAttribute("aria-expanded", String(isOpen));
-        menuToggle.setAttribute("aria-label", isOpen ? "Close menu" : "Open menu");
-        const toggleIcon = menuToggle.querySelector("i");
-        toggleIcon.classList.toggle("fa-bars", !isOpen);
-        toggleIcon.classList.toggle("fa-xmark", isOpen);
+      function setCollapsed(isCollapsed, saveChoice) {
+        rootElement.setAttribute("data-sidebar", isCollapsed ? "collapsed" : "expanded");
+        const label = isCollapsed ? "Expand sidebar" : "Collapse sidebar";
+        sidebarToggle.setAttribute("aria-expanded", String(!isCollapsed));
+        sidebarToggle.setAttribute("aria-label", label);
+        sidebarToggle.title = label;
+        if (saveChoice) {
+          // Remembered per person in the database, so it follows them across devices
+          fetch("{{ url_for('update_sidebar_state') }}", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },
+            body: JSON.stringify({ collapsed: isCollapsed }),
+          }).catch(() => {});
+        }
       }
 
-      menuToggle.addEventListener("click", () => setSidebarOpen(!body.classList.contains("sidebar-open")));
-      overlay.addEventListener("click", () => setSidebarOpen(false));
+      function setDrawerOpen(isOpen, returnFocus) {
+        body.classList.toggle("sidebar-open", isOpen);
+        overlay.classList.toggle("active", isOpen);
+        mobileMenuButton.setAttribute("aria-expanded", String(isOpen));
+        mobileMenuButton.setAttribute("aria-label", isOpen ? "Close navigation" : "Open navigation");
+        sidebarToggle.setAttribute("aria-label", isOpen ? "Close navigation" : "Collapse sidebar");
+        if (isOpen) {
+          const firstLink = sidebar.querySelector(".nav-link");
+          if (firstLink) firstLink.focus();
+        } else if (returnFocus) {
+          mobileMenuButton.focus();
+        }
+      }
+
+      sidebarToggle.addEventListener("click", () => {
+        if (smallScreenQuery.matches) {
+          setDrawerOpen(false, true);   // on phones this button closes the drawer
+        } else {
+          setCollapsed(rootElement.getAttribute("data-sidebar") !== "collapsed", true);
+        }
+      });
+      mobileMenuButton.addEventListener("click", () => setDrawerOpen(!body.classList.contains("sidebar-open"), false));
+      overlay.addEventListener("click", () => setDrawerOpen(false, true));
       document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape") setSidebarOpen(false);
+        if (event.key === "Escape" && body.classList.contains("sidebar-open")) setDrawerOpen(false, true);
       });
-      document.querySelectorAll(".nav-list .nav-link").forEach(link => {
-        link.addEventListener("click", () => {
-          if (smallScreenQuery.matches) setSidebarOpen(false);
-        });
+      sidebar.querySelectorAll(".nav-link").forEach(link => {
+        link.addEventListener("click", () => { if (smallScreenQuery.matches) setDrawerOpen(false, false); });
       });
-      smallScreenQuery.addEventListener("change", () => setSidebarOpen(false));
+      smallScreenQuery.addEventListener("change", () => setDrawerOpen(false, false));
 
       /* ---------- Theme ---------- */
       const darkSchemeQuery = window.matchMedia("(prefers-color-scheme: dark)");
@@ -142,7 +205,7 @@
         rootElement.setAttribute("data-effective-theme", getEffectiveTheme());
       }
 
-      // Exposed so the Settings page can preview a choice instantly
+      // Exposed so the Appearance tab can preview a choice instantly
       window.applyTheme = function (themeChoice) {
         if (themeChoice === "light" || themeChoice === "dark") {
           rootElement.setAttribute("data-theme", themeChoice);
@@ -154,7 +217,6 @@
       };
 
       function saveThemeChoice(themeChoice) {
-        const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
         return fetch("{{ url_for('update_theme') }}", {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-CSRFToken": csrfToken },

@@ -143,7 +143,7 @@
         <div class="card-title">
           <i class="fa-solid fa-sliders" style="color: var(--primary-green);"></i> Analysis Configuration
         </div>
-        <a class="text-link" href="#settings" style="font-size: 12px;">Change defaults</a>
+        <a class="text-link" href="#settings-defaults" style="font-size: 12px;">Change defaults</a>
       </div>
 
       <div class="controls-grid">
@@ -270,123 +270,6 @@
   </div>
 </section>
 
-<!-- 4. SETTINGS VIEW -->
-<section id="settings-view" class="view-content">
-  <h1 class="page-title">Settings</h1>
-
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title"><i class="fa-solid fa-user" style="color: var(--primary-green);"></i> Profile</div>
-    </div>
-    <form action="{{ url_for('update_profile') }}" method="POST" class="form-stack" data-validate>
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <div class="controls-grid two-columns">
-        <div class="field-group">
-          <label for="profile-full-name">Full Name</label>
-          <input type="text" id="profile-full-name" name="full_name" value="{{ user_name or '' }}" required
-                 maxlength="100" autocomplete="name" data-rule="name">
-        </div>
-        <div class="field-group">
-          <label for="profile-email">Email</label>
-          <input type="text" id="profile-email" value="{{ user_email or '' }}" readonly>
-        </div>
-      </div>
-      <div><button type="submit" class="btn-submit-analysis" data-loading-text="Saving..."><i class="fa-solid fa-floppy-disk"></i> Save Changes</button></div>
-    </form>
-  </div>
-
-  <form action="{{ url_for('update_preferences') }}" method="POST">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title"><i class="fa-solid fa-palette" style="color: var(--primary-green);"></i> Appearance</div>
-      </div>
-      <p class="card-description">Saved as soon as you pick one. "System" follows your device's light or dark setting.</p>
-      <div class="segmented-control" role="radiogroup" aria-label="Theme">
-        {% set theme_labels = {'system': ('fa-desktop', 'System'), 'light': ('fa-sun', 'Light'), 'dark': ('fa-moon', 'Dark')} %}
-        {% for theme_option in theme_options %}
-          <input type="radio" id="theme-{{ theme_option }}" name="theme" value="{{ theme_option }}"
-                 {% if preferences.theme == theme_option %}checked{% endif %}>
-          <label for="theme-{{ theme_option }}"><i class="fa-solid {{ theme_labels[theme_option][0] }}"></i> {{ theme_labels[theme_option][1] }}</label>
-        {% endfor %}
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="card-header">
-        <div class="card-title"><i class="fa-solid fa-sliders" style="color: var(--primary-green);"></i> Default Analysis Options</div>
-      </div>
-      <p class="card-description">Pre-selected in the Document Analyzer. You can still change them per upload.</p>
-      <div class="controls-grid">
-        <div class="field-group">
-          <label for="default-summary-depth">Summary Depth</label>
-          <select id="default-summary-depth" name="default_summary_depth">{{ option_list(summary_depth_options, preferences.default_summary_depth) }}</select>
-        </div>
-        <div class="field-group">
-          <label for="default-extraction-mode">Extraction Mode</label>
-          <select id="default-extraction-mode" name="default_extraction_mode">{{ option_list(extraction_mode_options, preferences.default_extraction_mode) }}</select>
-        </div>
-        <div class="field-group">
-          <label for="default-risk-level">Risk Detection Level</label>
-          <select id="default-risk-level" name="default_risk_level">{{ option_list(risk_level_options, preferences.default_risk_level) }}</select>
-        </div>
-        <div class="field-group">
-          <label for="default-context-hint">Context Hint</label>
-          <select id="default-context-hint" name="default_context_hint">{{ option_list(context_hint_options, preferences.default_context_hint) }}</select>
-        </div>
-      </div>
-      <button type="submit" class="btn-submit-analysis" style="margin-top: 20px;" data-loading-text="Saving...">
-        <i class="fa-solid fa-floppy-disk"></i> Save Preferences
-      </button>
-    </div>
-  </form>
-
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title"><i class="fa-solid fa-lock" style="color: var(--primary-green);"></i> Change Password</div>
-    </div>
-    <form action="{{ url_for('change_password') }}" method="POST" class="form-stack" data-validate>
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <div class="field-group">
-        <label for="current-password">Current Password</label>
-        <input type="password" id="current-password" name="current_password" required maxlength="128" autocomplete="current-password"
-               data-rule="required" data-required-message="Enter your current password.">
-      </div>
-      <div class="controls-grid two-columns">
-        <div class="field-group">
-          <label for="new-password">New Password</label>
-          <input type="password" id="new-password" name="new_password" required minlength="8" maxlength="128" autocomplete="new-password"
-                 data-rule="new-password" data-account-email="{{ (user_email or '') | lower }}" aria-describedby="new-password-rules">
-          <ul class="password-rules" id="new-password-rules" data-rules-for="new-password">
-            <li data-check="length">8+ characters</li>
-            <li data-check="letter">A letter</li>
-            <li data-check="number">A number</li>
-          </ul>
-        </div>
-        <div class="field-group">
-          <label for="confirm-password">Confirm New Password</label>
-          <input type="password" id="confirm-password" name="confirm_password" required maxlength="128" autocomplete="new-password"
-                 data-rule="confirm-password" data-match="new-password">
-        </div>
-      </div>
-      <div><button type="submit" class="btn-submit-analysis" data-loading-text="Updating..."><i class="fa-solid fa-key"></i> Update Password</button></div>
-    </form>
-  </div>
-
-  <div class="card">
-    <div class="card-header">
-      <div class="card-title"><i class="fa-solid fa-robot" style="color: var(--primary-green);"></i> AI Configuration</div>
-    </div>
-    <p class="summary-prose" style="font-size: 13px; color: var(--text-muted);">
-      Abstractive summaries and risk assessment are powered by Google Gemini. Document text is sent
-      to Google for these two steps only; extractive summaries run entirely on this server. The API
-      key is read from the server environment and is never shown here. If the AI service is busy or
-      unavailable, clauses are marked "Review" and can be re-assessed from the report page.
-    </p>
-  </div>
-</section>
-
 {% endblock %}
 
 {% block scripts %}
@@ -408,7 +291,7 @@
 
     navItems.forEach(item => {
       const link = item.querySelector('.nav-link');
-      if (!link) return;
+      if (!link || !item.getAttribute('data-view')) return;  // not a dashboard tab
       link.addEventListener('click', (event) => {
         const viewName = item.getAttribute('data-view').replace('-view', '');
         if (showView(viewName)) {
@@ -418,8 +301,10 @@
       });
     });
 
-    // Must run after the handlers above exist
-    showView(window.location.hash.replace('#', '') || 'dashboard');
+    // Must run after the handlers above exist. Fragments that are not tabs
+    // (e.g. #settings-defaults, which opens the settings window) keep the
+    // current tab, or the Dashboard on first load, instead of a blank page.
+    if (!showView(window.location.hash.replace('#', ''))) showView('dashboard');
     window.addEventListener('hashchange', () => showView(window.location.hash.replace('#', '')));
 
     /* ---------- Upload: click, keyboard, drag and drop ---------- */
@@ -566,14 +451,6 @@
       if (!selectElement) return;
       updateFieldHint(selectElement);
       selectElement.addEventListener('change', () => updateFieldHint(selectElement));
-    });
-
-    /* ---------- Theme picker in Settings: apply and save immediately ---------- */
-    document.querySelectorAll('input[name="theme"]').forEach(radio => {
-      radio.addEventListener('change', () => {
-        window.applyTheme(radio.value);
-        window.saveThemeChoice(radio.value);
-      });
     });
 
     /* ---------- Delete confirmation ---------- */

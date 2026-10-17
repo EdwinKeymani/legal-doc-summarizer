@@ -7,6 +7,7 @@ A Flask web application that reads contracts (PDF, Word or text) and produces:
 - obligations, prohibitions, rights and liabilities, grouped by party
 - key dates, deadlines, amounts and rates
 - downloadable PDF and Word reports
+- three roles for a legal-aid clinic (Member, Reviewer, Administrator), with an audit log of who did what
 
 Built as a Diploma in Computer Science project at Mount Kenya University. Results are informational only and are not legal advice.
 
@@ -43,6 +44,8 @@ Without `GEMINI_API_KEY` everything still works: summaries use the local algorit
 | `FORCE_SECURE_COOKIES` | Production: `1` | HTTPS-only cookies |
 | `SHOW_RESET_LINK` | Local only | Show password-reset links on screen |
 | `FLASK_DEBUG` | Local only | Debug mode for `python app.py` |
+| `INITIAL_ADMIN_EMAIL` | Once | Makes that already-registered account an Administrator at startup. Remove it afterwards. |
+| `AUTO_MIGRATE` | Optional | `0` stops the app from applying database migrations at startup (default: on) |
 
 ## Deployment (Render)
 
@@ -51,7 +54,7 @@ Without `GEMINI_API_KEY` everything still works: summaries use the local algorit
 - **Environment:** `SECRET_KEY`, `DATABASE_URL`, `GEMINI_API_KEY`, `FORCE_SECURE_COOKIES=1`
 - **Health check path:** `/health`
 
-Tables are created automatically on startup.
+Database migrations (`migrations/`) are applied automatically at startup, so a deploy needs no extra step. An increment 6 database upgrades in place: every existing account becomes a Member. Take a backup first (`tools/db_backup.py export`).
 
 ## Project layout
 
@@ -62,6 +65,7 @@ Tables are created automatically on startup.
 | `provisions.py` | Rule-based obligations, rights, prohibitions, liabilities, dates and amounts |
 | `report_export.py` | PDF (ReportLab) and Word (python-docx) reports |
 | `tools/db_backup.py` | Back up or move the database between SQLite and PostgreSQL |
+| `migrations/` | Versioned database changes (Flask-Migrate / Alembic) |
 | `templates/` | Jinja2 pages; `_*.html` files are shared partials |
 | `static/` | `styles.css` (app), `auth.css` (sign-in pages), `components.css` and `ui.js` (shared) |
 | `uploads/`, `legal.db` | Created at runtime, git-ignored |
@@ -75,11 +79,28 @@ python tools/db_backup.py export backups/backup.json --database-url "<url>"
 python tools/db_backup.py import backups/backup.json --database-url "<new url>"
 ```
 
+```bash
+flask --app app create-admin edwin@example.com              # make a registered account an Administrator
+flask --app app prune-audit-log --months 24                 # delete audit entries older than 24 months
+flask --app app db current                                  # which migration the database is on
+```
+
 Backup files contain password hashes and document text. They are git-ignored; keep them private.
+
+## Roles
+
+| Role | Who | Can |
+|---|---|---|
+| Member | Clinic clients (everyone who registers) | Upload contracts, read, export and delete their own reports |
+| Reviewer | Law students, paralegals, advocates | Work through the review queue (review workflow arrives in a later increment) |
+| Administrator | Clinic coordinator | Manage people and roles, view the permission matrix and the audit log |
+
+Permissions live in the database (`role`, `permission`, `role_permission`) and are checked on every request. Anything not granted is refused, and a refused page looks exactly like a missing one (404). Administrators don't upload documents: use a separate Member account for that.
 
 ## Data and privacy
 
 - **Passwords** are stored as scrypt hashes.
+- **Audit log** entries record actions, never passwords or contract text.
 - **Extractive summaries and provision finding** run entirely on the server.
 - **Sent to Google's Gemini API:** flagged clause sentences, for risk rating, and, in "Abstractive - Premium (AI)" mode only, up to the first 30,000 characters of the document.
 

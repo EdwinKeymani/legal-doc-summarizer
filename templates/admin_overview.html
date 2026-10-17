@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% import "_audit_details.html" as audit with context %}
+{% block title %}Overview · {{ brand_name }}{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Clinic Overview</h1>
+<p class="page-intro">People, activity and the clinic's workload. Figures only: contract names and contents stay private to their owners.</p>
+
+<div class="metrics-grid">
+  {% for role in roles %}
+  <div class="metric-card">
+    <div class="metric-title">{{ role.label | upper }}S</div>
+    <div class="metric-value">{{ active_counts_by_role.get(role.name, 0) }}</div>
+    <div class="metric-trend"><i class="fa-solid {{ {'member': 'fa-user', 'reviewer': 'fa-user-check', 'admin': 'fa-user-shield'}[role.name] }}"></i> Active accounts</div>
+  </div>
+  {% endfor %}
+  <div class="metric-card">
+    <div class="metric-title">DEACTIVATED</div>
+    <div class="metric-value">{{ deactivated_count }}</div>
+    <div class="metric-trend"><i class="fa-solid fa-user-slash"></i> Cannot sign in</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-title">DOCUMENTS ANALYSED</div>
+    <div class="metric-value">{{ documents_total }}</div>
+    <div class="metric-trend"><i class="fa-solid fa-file-lines"></i> {{ documents_this_week }} in the last 7 days</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <div class="card-title"><i class="fa-solid fa-bolt" style="color: var(--primary-green);"></i> Quick actions</div>
+  </div>
+  <div class="quick-actions">
+    {% if 'user.view_all' in user_permissions %}
+    <a class="btn-secondary" href="{{ url_for('admin_users') }}"><i class="fa-solid fa-users"></i> Manage users</a>
+    <a class="btn-secondary" href="{{ url_for('admin_users', role='reviewer') }}"><i class="fa-solid fa-user-check"></i> See reviewers</a>
+    {% endif %}
+    {% if 'user.change_role' in user_permissions %}
+    <a class="btn-secondary" href="{{ url_for('admin_roles') }}"><i class="fa-solid fa-shield-halved"></i> Roles &amp; permissions</a>
+    {% endif %}
+  </div>
+</div>
+
+{% if 'audit.view' in user_permissions %}
+<div class="card">
+  <div class="card-header">
+    <div class="card-title"><i class="fa-solid fa-clipboard-list" style="color: var(--primary-green);"></i> Recent activity</div>
+    <a class="text-link" href="{{ url_for('admin_audit') }}" style="font-size: 13px;">Full audit log</a>
+  </div>
+  <div class="table-scroll-wrapper">
+    <table class="data-table">
+      <thead><tr><th>When</th><th>Who</th><th>What</th><th>Details</th></tr></thead>
+      <tbody>
+        {% for entry in recent_events %}
+        <tr>
+          <td><time datetime="{{ entry.occurred_at | iso_utc }}" data-local-format="datetime">{{ entry.occurred_at.strftime('%b %d, %Y %H:%M') }} UTC</time></td>
+          <td>{{ audit.actor(entry) }}</td>
+          <td>{{ entry.action | audit_action_label }}</td>
+          <td>{{ audit.details(entry) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="empty-state">No activity recorded yet.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

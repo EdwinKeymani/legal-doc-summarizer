@@ -5,6 +5,9 @@
  *   3. Loading states: buttons show a spinner while a form submits or a
  *      download is prepared, and cannot be clicked twice.
  *   4. Field validation: messages under each field, matching the server's.
+ *   5. Account menu (signed-in pages).
+ *   6. Settings window (signed-in pages).
+ *   7. Confirmation dialog before sensitive admin actions.
  */
 (function () {
   "use strict";
@@ -322,7 +325,163 @@
     });
   }
 
+  /* ---------- 5. Account menu ---------- */
+  // A small menu anchored to the account icon. Closes on Escape, on a click
+  // outside, or after choosing an item; arrow keys move between items.
+
+  function setUpAccountMenu() {
+    var accountButton = document.getElementById("account-button");
+    var accountMenu = document.getElementById("account-menu");
+    if (!accountButton || !accountMenu) return;
+    var menuItems = Array.prototype.slice.call(accountMenu.querySelectorAll('[role="menuitem"]'));
+
+    function setMenuOpen(isOpen, focusTarget) {
+      accountMenu.hidden = !isOpen;
+      accountButton.setAttribute("aria-expanded", String(isOpen));
+      if (isOpen && menuItems.length) menuItems[0].focus();
+      if (!isOpen && focusTarget) focusTarget.focus();
+    }
+
+    accountButton.addEventListener("click", function () { setMenuOpen(accountMenu.hidden); });
+    document.addEventListener("click", function (event) {
+      if (!accountMenu.hidden && !accountMenu.contains(event.target) && !accountButton.contains(event.target)) {
+        setMenuOpen(false);
+      }
+    });
+    accountMenu.addEventListener("keydown", function (event) {
+      var currentIndex = menuItems.indexOf(document.activeElement);
+      if (event.key === "Escape") { event.preventDefault(); setMenuOpen(false, accountButton); }
+      else if (event.key === "ArrowDown") { event.preventDefault(); menuItems[(currentIndex + 1) % menuItems.length].focus(); }
+      else if (event.key === "ArrowUp") { event.preventDefault(); menuItems[(currentIndex - 1 + menuItems.length) % menuItems.length].focus(); }
+      else if (event.key === "Tab") { setMenuOpen(false); }
+    });
+    accountMenu.querySelectorAll("[data-open-settings]").forEach(function (item) {
+      item.addEventListener("click", function () {
+        setMenuOpen(false);
+        window.openSettings(item.dataset.openSettings);
+      });
+    });
+  }
+
+  /* ---------- 6. Settings window ---------- */
+  // Native <dialog>: the browser keeps focus inside and Escape closes it.
+  // Opened from the account menu, or by a link to #settings-<tab> (the server
+  // uses that to reopen the right tab after a validation error).
+
+  function setUpSettingsDialog() {
+    var dialog = document.getElementById("settings-dialog");
+    if (!dialog) { window.openSettings = function () {}; return; }
+    var tabs = Array.prototype.slice.call(dialog.querySelectorAll('[role="tab"]'));
+
+    function selectTab(tabName, moveFocus) {
+      var chosenTab = tabs.filter(function (tab) { return tab.dataset.settingsTab === tabName; })[0] || tabs[0];
+      tabs.forEach(function (tab) {
+        var isChosen = tab === chosenTab;
+        tab.setAttribute("aria-selected", String(isChosen));
+        tab.tabIndex = isChosen ? 0 : -1;
+        document.getElementById(tab.getAttribute("aria-controls")).hidden = !isChosen;
+      });
+      if (moveFocus) chosenTab.focus();
+      return chosenTab;
+    }
+
+    window.openSettings = function (tabName) {
+      var chosenTab = selectTab(tabName, false);
+      if (!dialog.open) dialog.showModal();
+      // A modal dialog sits above everything else on the page, so messages
+      // (e.g. "Current password is incorrect.") move inside it while it is open
+      var toastStack = document.querySelector(".toast-stack");
+      if (toastStack && toastStack.parentNode !== dialog) dialog.appendChild(toastStack);
+      var panel = document.getElementById(chosenTab.getAttribute("aria-controls"));
+      var firstField = panel.querySelector("input:not([type=hidden]):not([readonly]), select");
+      (firstField || chosenTab).focus({ preventScroll: true }); // the page behind must not jump
+    };
+
+    tabs.forEach(function (tab, tabIndex) {
+      tab.addEventListener("click", function () { selectTab(tab.dataset.settingsTab, true); });
+      tab.addEventListener("keydown", function (event) {
+        var nextIndex = null;
+        if (event.key === "ArrowRight") nextIndex = (tabIndex + 1) % tabs.length;
+        if (event.key === "ArrowLeft") nextIndex = (tabIndex - 1 + tabs.length) % tabs.length;
+        if (event.key === "Home") nextIndex = 0;
+        if (event.key === "End") nextIndex = tabs.length - 1;
+        if (nextIndex !== null) { event.preventDefault(); selectTab(tabs[nextIndex].dataset.settingsTab, true); }
+      });
+    });
+
+    dialog.querySelectorAll("[data-close-settings]").forEach(function (button) {
+      button.addEventListener("click", function () { dialog.close(); });
+    });
+    // A click on the dimmed backdrop (outside the box) closes it
+    dialog.addEventListener("click", function (event) { if (event.target === dialog) dialog.close(); });
+    dialog.addEventListener("close", function () {
+      var toastStack = dialog.querySelector(".toast-stack");
+      if (toastStack) document.body.appendChild(toastStack);
+      if (/^#settings/.test(window.location.hash)) {
+        history.replaceState(null, "", window.location.pathname + window.location.search);
+      }
+      var accountButton = document.getElementById("account-button");
+      if (accountButton) accountButton.focus({ preventScroll: true });
+    });
+
+    // Appearance: apply and save as soon as a theme is picked
+    dialog.querySelectorAll('input[name="theme"]').forEach(function (radio) {
+      radio.addEventListener("change", function () {
+        window.applyTheme(radio.value);
+        window.saveThemeChoice(radio.value);
+      });
+    });
+
+    function openFromHash() {
+      var match = window.location.hash.match(/^#settings(?:-([a-z]+))?$/);
+      if (match) window.openSettings(match[1] || "profile");
+    }
+    document.querySelectorAll('a[href^="#settings"]').forEach(function (link) {
+      link.addEventListener("click", function (event) {
+        event.preventDefault();
+        var tabName = link.getAttribute("href").replace(/^#settings-?/, "") || "profile";
+        window.openSettings(tabName);
+      });
+    });
+    window.addEventListener("hashchange", openFromHash);
+    openFromHash();
+  }
+
+  /* ---------- 7. Confirmation before sensitive admin actions ---------- */
+  // <form data-confirm="Question?" data-confirm-button="Deactivate">: shows a
+  // dialog first; the form only submits after "Confirm".
+
+  function setUpConfirmForms() {
+    var confirmDialog = document.getElementById("confirm-dialog");
+    if (!confirmDialog) return;
+    var pendingForm = null;
+    var confirmButton = document.getElementById("confirm-dialog-confirm");
+
+    document.querySelectorAll("form[data-confirm]").forEach(function (form) {
+      form.addEventListener("submit", function (event) {
+        if (form.dataset.confirmed === "true") return;
+        event.preventDefault();
+        pendingForm = form;
+        document.getElementById("confirm-dialog-text").textContent = form.dataset.confirm;
+        confirmButton.textContent = form.dataset.confirmButton || "Confirm";
+        confirmDialog.showModal();
+      });
+    });
+    document.getElementById("confirm-dialog-cancel").addEventListener("click", function () { confirmDialog.close(); });
+    confirmButton.addEventListener("click", function () {
+      if (!pendingForm) return;
+      pendingForm.dataset.confirmed = "true";
+      window.setButtonBusy(confirmButton, "Working...");
+      // requestSubmit() fires a normal submit, so the pressed button gets its spinner
+      var submitButton = pendingForm.querySelector('[type="submit"]');
+      if (pendingForm.requestSubmit) { pendingForm.requestSubmit(submitButton || undefined); } else { pendingForm.submit(); }
+    });
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
+    setUpAccountMenu();
+    setUpSettingsDialog();
+    setUpConfirmForms();
     document.querySelectorAll(".toast").forEach(setUpToast);
     // Password toggles first, so error messages are placed after the eye button's wrapper
     document.querySelectorAll('input[type="password"]').forEach(addPasswordToggle);

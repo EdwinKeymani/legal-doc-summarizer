@@ -11,17 +11,22 @@ Then open: http://127.0.0.1:5000
 import io
 import os
 import re
+import json
 import time
 import secrets
 from datetime import datetime, timezone, timedelta
 from functools import wraps
+import click
 from flask import (
     Flask, render_template, request, redirect,
-    url_for, session, flash, send_from_directory, send_file, abort, jsonify
+    url_for, session, flash, send_from_directory, send_file, abort, jsonify, g, has_request_context
 )
 from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate, upgrade as upgrade_database_schema
+import sqlalchemy
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
+from werkzeug.middleware.proxy_fix import ProxyFix
 from markupsafe import Markup
 import markdown as markdown_renderer
 import nh3
@@ -42,6 +47,12 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv()
 
 app = Flask(__name__)
+
+# Render runs the app behind one proxy (it sets RENDER=true itself). Trusting
+# that single hop gives the audit log the visitor's real IP address instead of
+# the proxy's, and makes generated links use https.
+if os.environ.get("RENDER"):
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 # Minutes after which a document still marked "Processing" is treated as
 # interrupted (worker restart, timeout, closed tab) and marked Failed.
@@ -72,6 +83,21 @@ VISIBLE_SEVERITIES_BY_RISK_LEVEL = {
 
 # Proposal requirement 4.3: summary within 15 seconds for files under 50 pages
 PERFORMANCE_TARGET_SECONDS = 15
+
+# Roles (increment 7). Their permissions live in the database (role,
+# permission and role_permission tables), seeded by the migration.
+ROLE_MEMBER = "member"
+ROLE_REVIEWER = "reviewer"
+ROLE_ADMIN = "admin"
+ROLE_ORDER = [ROLE_MEMBER, ROLE_REVIEWER, ROLE_ADMIN]
+
+# Set this to an existing account's email to make it the first Administrator.
+# It only acts while no Administrator exists, so it cannot be used later to
+# take over the system. Remove it once the first Administrator is set up.
+INITIAL_ADMIN_EMAIL = os.environ.get("INITIAL_ADMIN_EMAIL", "").strip().lower()
+
+USERS_PER_PAGE = 25
+AUDIT_ENTRIES_PER_PAGE = 50
 
 # How long "Remember me" keeps someone signed in
 REMEMBER_ME_DAYS = 30
@@ -137,6 +163,10 @@ def enable_sqlite_foreign_keys(dbapi_connection, connection_record):
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
 database = SQLAlchemy(app)
 
+# Schema changes are versioned scripts in migrations/versions (Flask-Migrate,
+# built on Alembic). They run automatically at start-up; see prepare_database().
+migrate = Migrate(app, database, directory=os.path.join(BASE_DIR, "migrations"))
+
 # Clean up database sessions after every request to prevent stale connections
 @app.teardown_appcontext
 def shutdown_session(exception=None):
@@ -150,6 +180,35 @@ os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
 # ---------------------------------------------------------------------------
 # Database models
 # ---------------------------------------------------------------------------
+# Links each role to the permissions it holds (one row per tick in the
+# role-permission matrix).
+role_permission = database.Table(
+    "role_permission",
+    database.Column("role_id", database.Integer, database.ForeignKey("role.id"), primary_key=True),
+    database.Column("permission_id", database.Integer, database.ForeignKey("permission.id"), primary_key=True),
+)
+
+
+class Role(database.Model):
+    id = database.Column(database.Integer, primary_key=True)
+    name = database.Column(database.String(20), unique=True, nullable=False)   # member / reviewer / admin
+    label = database.Column(database.String(40), nullable=False)               # shown on screen
+    description = database.Column(database.String(255), nullable=False)
+    permissions = database.relationship(
+        "Permission", secondary=role_permission, lazy="selectin", order_by="Permission.id"
+    )
+
+    @property
+    def permission_names(self):
+        return {permission.code_name for permission in self.permissions}
+
+
+class Permission(database.Model):
+    id = database.Column(database.Integer, primary_key=True)
+    code_name = database.Column(database.String(60), unique=True, nullable=False)  # e.g. review.assign
+    description = database.Column(database.String(255), nullable=False)
+
+
 class User(database.Model):
     id = database.Column(database.Integer, primary_key=True)
     full_name = database.Column(database.String(120), nullable=False)
@@ -157,6 +216,14 @@ class User(database.Model):
     password_hash = database.Column(database.String(255), nullable=False)
     reset_token = database.Column(database.String(64))
     reset_token_expiry = database.Column(database.DateTime)
+    role_id = database.Column(
+        database.Integer, database.ForeignKey("role.id", name="fk_user_role_id_role"), nullable=False, index=True
+    )
+    # Deactivated accounts cannot sign in; their documents and history are kept
+    is_active = database.Column(
+        database.Boolean, nullable=False, default=True, server_default=sqlalchemy.true()
+    )
+    role = database.relationship("Role", lazy="joined")
     documents = database.relationship("Document", backref="owner", lazy=True)
 
 
@@ -204,9 +271,8 @@ class DocumentAnalysis(database.Model):
 
 
 class UserPreference(database.Model):
-    """Per-user settings. Kept in its own table (one row per user) so adding it
-    needs no migration: database.create_all() creates new tables on startup,
-    on both local SQLite and Render Postgres, without touching existing ones."""
+    """Per-user settings, one row per user. A user without a row gets the
+    defaults (see get_user_preferences); the row is created on first save."""
     id = database.Column(database.Integer, primary_key=True)
     user_id = database.Column(database.Integer, database.ForeignKey("user.id"), unique=True, nullable=False)
     theme = database.Column(database.String(10), nullable=False, default="system")
@@ -214,6 +280,34 @@ class UserPreference(database.Model):
     default_extraction_mode = database.Column(database.String(40), nullable=False, default=EXTRACTION_MODE_OPTIONS[0])
     default_risk_level = database.Column(database.String(40), nullable=False, default=RISK_LEVEL_OPTIONS[0])
     default_context_hint = database.Column(database.String(40), nullable=False, default=CONTEXT_HINT_OPTIONS[0])
+    sidebar_collapsed = database.Column(
+        database.Boolean, nullable=False, default=False, server_default=sqlalchemy.false()
+    )
+
+
+class AuditLog(database.Model):
+    """Append-only record of who did what, to which record, and when. The app
+    has no route that edits or deletes entries. Never holds passwords, tokens
+    or contract text: only IDs and short facts."""
+    id = database.Column(database.Integer, primary_key=True)
+    occurred_at = database.Column(
+        database.DateTime, nullable=False, default=lambda: datetime.now(timezone.utc), index=True
+    )
+    actor_user_id = database.Column(database.Integer, database.ForeignKey("user.id"), nullable=True, index=True)
+    actor_role = database.Column(database.String(20))   # copied, so later role changes don't rewrite history
+    action = database.Column(database.String(60), nullable=False, index=True)
+    target_type = database.Column(database.String(40))
+    target_id = database.Column(database.Integer)
+    details = database.Column(database.Text)             # small JSON object
+    ip_address = database.Column(database.String(45))
+    actor = database.relationship("User", lazy="joined")
+
+    @property
+    def details_dict(self):
+        try:
+            return json.loads(self.details) if self.details else {}
+        except ValueError:
+            return {}
 
 
 # ---------------------------------------------------------------------------
@@ -261,23 +355,74 @@ def inject_brand():
 
 @app.context_processor
 def inject_theme():
-    """Logged-in pages get the saved theme from the session. Logged-out pages
-    get an empty value, and the browser falls back to the last theme it saw."""
-    return {"current_theme": session.get("theme", "system") if "user_id" in session else ""}
+    """Signed-in pages get the theme saved in the database, so a change on one
+    device applies on the others. Signed-out pages get an empty value, and the
+    browser falls back to the last theme it saw."""
+    preferences = g.get("preferences")
+    return {"current_theme": preferences.theme if preferences is not None else ""}
+
+
+def initials_for(full_name):
+    parts = (full_name or "").split()
+    if not parts:
+        return "U"
+    initials = parts[0][0] + parts[1][0] if len(parts) >= 2 else parts[0][:2]
+    return initials.upper()
+
+
+def avatar_hue_for(full_name):
+    """A stable colour per person for the initials circle (same name, same
+    colour). Only the hue varies; saturation and lightness are fixed in CSS so
+    white text stays readable on every colour."""
+    return sum(ord(character) for character in (full_name or "")) * 47 % 360
+
+
+# Sidebar entries. Each appears only for roles holding its permission.
+# (permission, key, label, Font Awesome icon, endpoint, URL fragment)
+NAVIGATION_ITEMS = [
+    ("document.view_own", "dashboard", "Dashboard", "fa-house", "dashboard", "dashboard"),
+    ("document.upload", "analyzer", "Document Analyzer", "fa-file-contract", "dashboard", "analyzer"),
+    ("document.view_own", "documents", "My Documents", "fa-folder-open", "dashboard", "documents"),
+    ("review.view_queue", "review_queue", "Review Queue", "fa-list-check", "dashboard", None),
+    ("stats.view", "overview", "Overview", "fa-chart-line", "dashboard", None),
+    ("user.view_all", "users", "Users", "fa-users", "admin_users", None),
+    ("user.change_role", "roles", "Roles & Permissions", "fa-shield-halved", "admin_roles", None),
+    ("audit.view", "audit", "Audit Log", "fa-clipboard-list", "admin_audit", None),
+]
 
 
 @app.context_processor
-def inject_user_initials():
-    """Make user_initials available in every template without passing it per route."""
-    name = session.get("user_name", "")
-    if not name:
-        return {"user_initials": "U"}
-    parts = name.split()
-    if len(parts) >= 2:
-        initials = parts[0][0] + parts[1][0]
-    else:
-        initials = name[:2]
-    return {"user_initials": initials.upper()}
+def inject_account():
+    """Everything the shared layout (sidebar, account menu, settings window)
+    needs about the signed-in person. Empty on signed-out pages."""
+    user = g.get("current_user")
+    if user is None:
+        return {"current_user": None, "navigation_items": [], "user_initials": "U"}
+    navigation_items = [
+        {
+            "key": key, "label": label, "icon": icon,
+            "url": url_for(endpoint) + (f"#{fragment}" if fragment else ""),
+            # Dashboard tabs switch without reloading; ui needs to know which
+            "tab_view": f"{fragment}-view" if fragment else None,
+        }
+        for permission_name, key, label, icon, endpoint, fragment in NAVIGATION_ITEMS
+        if permission_name in g.permissions
+    ]
+    return {
+        "current_user": user,
+        "user_permissions": g.permissions,
+        "navigation_items": navigation_items,
+        "user_initials": initials_for(user.full_name),
+        "avatar_hue": avatar_hue_for(user.full_name),
+        "preferences": g.preferences,
+        "sidebar_collapsed": bool(g.preferences and g.preferences.sidebar_collapsed),
+        "settings_return_path": request.path,
+        "theme_options": THEME_OPTIONS,
+        "summary_depth_options": SUMMARY_DEPTH_OPTIONS,
+        "extraction_mode_options": EXTRACTION_MODE_OPTIONS,
+        "risk_level_options": RISK_LEVEL_OPTIONS,
+        "context_hint_options": CONTEXT_HINT_OPTIONS,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -445,13 +590,140 @@ def mark_stale_documents_failed(user_id):
 
 
 def login_required(view_func):
-    """Redirect anonymous visitors to the login page before running a view."""
+    """Redirect anonymous visitors to the login page before running a view.
+    Used only for pages every role may open (settings, sign out); everything
+    else uses permission_required."""
     @wraps(view_func)
     def wrapped(*args, **kwargs):
-        if "user_id" not in session:
+        if g.get("current_user") is None:
             return redirect(url_for("login"))
         return view_func(*args, **kwargs)
     return wrapped
+
+
+# ---------------------------------------------------------------------------
+# Access control (increment 7): who is signed in, and what they may do
+# ---------------------------------------------------------------------------
+@app.before_request
+def load_signed_in_user():
+    """Re-read the signed-in user, their role and its permissions from the
+    database on every request, instead of trusting the session cookie. A role
+    change or a deactivation therefore takes effect on the person's next click."""
+    g.current_user = None
+    g.permissions = frozenset()
+    g.preferences = None
+    if request.endpoint == "static" or "user_id" not in session:
+        return None
+
+    user = database.session.get(User, session["user_id"])
+    if user is None:
+        session.clear()
+        return None
+    if not user.is_active:
+        session.clear()
+        flash("This account has been deactivated. Contact the clinic administrator if you think this is a mistake.")
+        return redirect(url_for("login"))
+
+    g.current_user = user
+    g.permissions = frozenset(user.role.permission_names)
+    g.preferences = get_user_preferences(user.id)
+    return None
+
+
+def has_permission(user, permission_name):
+    """True if the user's role holds this permission. Anything not granted is
+    refused (deny by default): an unknown or misspelt name is never granted."""
+    if user is None or not user.is_active:
+        return False
+    if user is g.get("current_user"):
+        return permission_name in g.permissions
+    return permission_name in user.role.permission_names
+
+
+def deny_access(reason_details):
+    """Refuse without revealing anything: the same 'not found' page as for a
+    record that does not exist, so IDs and admin pages cannot be probed."""
+    record_audit_event("access.denied", details={**reason_details, "path": request.path}, commit=True)
+    abort(404)
+
+
+def permission_required(permission_name):
+    """Route decorator: the signed-in user's role must hold this permission."""
+    def decorator(view_func):
+        @wraps(view_func)
+        def wrapped(*args, **kwargs):
+            if g.get("current_user") is None:
+                return redirect(url_for("login"))
+            if not has_permission(g.current_user, permission_name):
+                deny_access({"permission": permission_name})
+            return view_func(*args, **kwargs)
+        return wrapped
+    return decorator
+
+
+# What each kind of document action needs when the user owns the document
+OWN_DOCUMENT_PERMISSION_BY_PURPOSE = {
+    "view": "document.view_own",        # read the report, re-run the risk assessment
+    "export": "document.export_own",    # PDF / Word report, original file
+    "delete": "document.delete_own",
+}
+
+
+def can_access_document(user, document, purpose):
+    """The one place that decides who may touch a document.
+
+    Owners need the matching permission for the purpose. Reviewers will reach
+    documents assigned to them through document.view_assigned (increment 8).
+    Administrators never read contract text, so they have no path here."""
+    if user is None or document is None:
+        return False
+    return document.user_id == user.id and has_permission(user, OWN_DOCUMENT_PERMISSION_BY_PURPOSE[purpose])
+
+
+def get_document_or_404(document_id, purpose):
+    document = database.session.get(Document, document_id)
+    if not can_access_document(g.get("current_user"), document, purpose):
+        deny_access({"document_id": document_id, "purpose": purpose})
+    return document
+
+
+def record_audit_event(action, target_type=None, target_id=None, details=None, actor=None, commit=False):
+    """Add an audit entry.
+
+    With commit=False (the default) it is saved by the caller's own commit, so
+    the entry and the action are stored together or not at all. commit=True is
+    for events with nothing else to save (sign-in, export); if that write fails
+    the user's action still goes ahead and the failure goes to the server log."""
+    actor = actor if actor is not None else g.get("current_user")
+    entry = AuditLog(
+        occurred_at=datetime.now(timezone.utc),
+        actor_user_id=actor.id if actor is not None else None,
+        actor_role=actor.role.name if actor is not None and actor.role is not None else None,
+        action=action,
+        target_type=target_type,
+        target_id=target_id,
+        details=json.dumps(details, ensure_ascii=False, default=str) if details else None,
+        ip_address=(request.remote_addr or "")[:45] or None if has_request_context() else None,
+    )
+    database.session.add(entry)
+    if commit:
+        try:
+            database.session.commit()
+        except Exception:  # noqa: BLE001
+            database.session.rollback()
+            app.logger.exception("Could not write audit entry %s", action)
+    return entry
+
+
+def role_by_name(role_name):
+    return Role.query.filter_by(name=role_name).one()
+
+
+def count_active_admins(lock_rows=False):
+    query = User.query.join(Role).filter(Role.name == ROLE_ADMIN, User.is_active.is_(True))
+    if lock_rows:
+        query = query.with_for_update(of=User)  # PostgreSQL: two admins can't demote each other at once
+    return len(query.all())
 
 
 # ---------------------------------------------------------------------------
@@ -470,12 +742,18 @@ def login():
 
         if email_error(email) or not password or len(password) > PASSWORD_MAX_LENGTH:
             # Same wording as a wrong password: never reveal which part failed
+            record_audit_event("auth.login_failed", details={"email": email[:EMAIL_MAX_LENGTH]}, commit=True)
             flash("Invalid email or password.")
             return render_template("login.html", form_values={"email": email}), 400
 
         user = User.query.filter_by(email=email).first()
 
         if user and check_password_hash(user.password_hash, password):
+            if not user.is_active:
+                # Only said after a correct password, so it reveals nothing
+                record_audit_event("auth.login_blocked", "user", user.id, commit=True)
+                flash("This account has been deactivated. Contact the clinic administrator if you think this is a mistake.")
+                return render_template("login.html", form_values={"email": email}), 403
             session.clear()
             # Ticked: stay signed in for REMEMBER_ME_DAYS. Unticked: signed out
             # when the browser closes. (Previously always permanent, so the
@@ -483,9 +761,12 @@ def login():
             session.permanent = request.form.get("remember") == "on"
             session["user_id"] = user.id
             session["user_name"] = user.full_name
-            session["theme"] = get_user_preferences(user.id).theme
+            record_audit_event("auth.login_succeeded", "user", user.id, actor=user, commit=True)
             return redirect(url_for("dashboard"))
 
+        # The email typed is kept (never the password), to spot guessing
+        record_audit_event("auth.login_failed", "user" if user else None, user.id if user else None,
+                           details={"email": email}, commit=True)
         flash("Invalid email or password.")
         # Re-show the form with the email kept, so only the password is retyped
         return render_template("login.html", form_values={"email": email}), 401
@@ -524,15 +805,20 @@ def register():
                 full_name=full_name,
                 email=email,
                 password_hash=generate_password_hash(password),
+                # Always a Member: the role is never read from the form, so
+                # nobody can register themselves as a Reviewer or Administrator
+                role=role_by_name(ROLE_MEMBER),
+                is_active=True,
             )
             database.session.add(new_user)
-            database.session.commit()  # Saves cleanly to PostgreSQL
+            database.session.flush()  # gives new_user an id for the audit entry
+            record_audit_event("user.registered", "user", new_user.id, actor=new_user)
+            database.session.commit()  # account and audit entry saved together
 
             session.clear()
             session.permanent = False  # new accounts get a browser-session login
             session["user_id"] = new_user.id
             session["user_name"] = new_user.full_name
-            session["theme"] = "system"
             return redirect(url_for("dashboard"))
 
         except Exception as e:
@@ -545,6 +831,8 @@ def register():
     return render_template("register.html", form_values={}, field_errors={})
 @app.route("/logout")
 def logout():
+    if g.get("current_user") is not None:
+        record_audit_event("auth.logout", "user", g.current_user.id, commit=True)
     session.clear()
     return redirect(url_for("login"))
 
@@ -552,6 +840,18 @@ def logout():
 @app.route("/dashboard")
 @login_required
 def dashboard():
+    """Everyone lands on /dashboard after signing in; what they see depends on
+    their role's permissions."""
+    if has_permission(g.current_user, "document.view_own"):
+        return render_member_dashboard()
+    if has_permission(g.current_user, "review.view_queue"):
+        return render_template("reviewer_home.html", active_view="review_queue")
+    if has_permission(g.current_user, "stats.view"):
+        return render_admin_overview()
+    deny_access({"permission": "any home page"})
+
+
+def render_member_dashboard():
     mark_stale_documents_failed(session["user_id"])
 
     user_documents = (
@@ -637,7 +937,7 @@ def dashboard():
 
 
 @app.route("/upload", methods=["POST"])
-@login_required
+@permission_required("document.upload")
 def upload_document():
     uploaded_file = request.files.get("document")
 
@@ -718,6 +1018,8 @@ def upload_document():
                     explanation=clause.get("explanation", ""),
                 )
             )
+        record_audit_event("document.uploaded", "document", new_document.id, details={
+            "file_name": original_name, "status": "Processed", "mode": analysis_options["extraction_mode"]})
         database.session.commit()
         assessment_failed = any(
             clause.get("severity") == "Review" for clause in detected_clauses
@@ -737,6 +1039,8 @@ def upload_document():
         analysis_record.processing_seconds = round(time.perf_counter() - processing_started_at, 2)
         new_document.analysis = analysis_record
         database.session.add(new_document)
+        record_audit_event("document.uploaded", "document", new_document.id, details={
+            "file_name": original_name, "status": "Failed", "mode": analysis_options["extraction_mode"]})
         database.session.commit()
         flash(f"'{original_name}' could not be processed. The reason is shown below.")
 
@@ -746,15 +1050,9 @@ def upload_document():
 
 
 @app.route("/document/<int:document_id>")
-@login_required
+@permission_required("document.view_own")
 def view_document(document_id):
-    document = database.session.get(Document, document_id)
-    if document is None:
-        abort(404)
-
-    if document.user_id != session["user_id"]:
-        flash("You do not have access to that document.")
-        return redirect(url_for("dashboard"))
+    document = get_document_or_404(document_id, "view")
 
     # Apply this document's Risk Detection Level when displaying. Every clause
     # is stored; rows outside the level are hidden behind "Show all".
@@ -798,17 +1096,12 @@ EXPORT_FORMATS = {
 
 
 @app.route("/document/<int:document_id>/export/<export_format>")
-@login_required
+@permission_required("document.export_own")
 def export_report(document_id, export_format):
     """Download the analysis as a PDF or Word report (proposal requirement 4.2)."""
     if export_format not in EXPORT_FORMATS:
         abort(404)
-    document = database.session.get(Document, document_id)
-    if document is None:
-        abort(404)
-    if document.user_id != session["user_id"]:
-        flash("You do not have access to that document.")
-        return redirect(url_for("dashboard"))
+    document = get_document_or_404(document_id, "export")
     if document.status != "Processed":
         flash("Only successfully processed documents can be exported.")
         return redirect(url_for("view_document", document_id=document.id))
@@ -832,12 +1125,24 @@ def export_report(document_id, export_format):
         return redirect(url_for("view_document", document_id=document.id))
 
     mime_type, extension = EXPORT_FORMATS[export_format]
+    record_audit_event("document.exported", "document", document.id,
+                       details={"file_name": document.file_name, "format": export_format}, commit=True)
     return attach_download_token(send_file(
         io.BytesIO(file_bytes),
         mimetype=mime_type,
         as_attachment=True,
         download_name=report_filename(document.file_name, extension),
     ))
+
+
+def settings_return_url(tab=None):
+    """Settings are a window that opens over any page, so after saving go back
+    to that page. Only a path on this site is accepted (never another site),
+    and on an error the window reopens on the same tab."""
+    return_path = request.form.get("return_to", "").split("#")[0]
+    if not return_path.startswith("/") or return_path.startswith("//") or "\\" in return_path:
+        return_path = url_for("dashboard")
+    return return_path + (f"#settings-{tab}" if tab else "")
 
 
 @app.route("/settings/profile", methods=["POST"])
@@ -848,16 +1153,17 @@ def update_profile():
     name_problem = full_name_error(full_name)
     if name_problem:
         flash(name_problem)
-        return redirect(url_for("dashboard") + "#settings")
+        return redirect(settings_return_url("profile"))
 
-    user = database.session.get(User, session["user_id"])
-    user.full_name = full_name
-    database.session.commit()
-
+    user = g.current_user
+    if user.full_name != full_name:
+        user.full_name = full_name
+        record_audit_event("user.profile_updated", "user", user.id)
+        database.session.commit()
     session["user_name"] = full_name
 
     flash("Profile updated successfully.", "success")
-    return redirect(url_for("dashboard") + "#settings")
+    return redirect(settings_return_url())
 
 
 @app.route("/settings/password", methods=["POST"])
@@ -867,37 +1173,39 @@ def change_password():
     new_password = request.form.get("new_password", "")
     confirm_password = request.form.get("confirm_password", "")
 
-    user = database.session.get(User, session["user_id"])
+    user = g.current_user
 
     if not check_password_hash(user.password_hash, current_password):
         flash("Current password is incorrect.")
-        return redirect(url_for("dashboard") + "#settings")
+        return redirect(settings_return_url("security"))
 
     password_problem = new_password_error(new_password, user.email)
     if password_problem:
         flash(password_problem)
-        return redirect(url_for("dashboard") + "#settings")
+        return redirect(settings_return_url("security"))
 
     if new_password == current_password:
         flash("The new password must be different from the current one.")
-        return redirect(url_for("dashboard") + "#settings")
+        return redirect(settings_return_url("security"))
 
     if new_password != confirm_password:
         flash("New password and confirmation do not match.")
-        return redirect(url_for("dashboard") + "#settings")
+        return redirect(settings_return_url("security"))
 
     user.password_hash = generate_password_hash(new_password)
+    record_audit_event("auth.password_changed", "user", user.id)
     database.session.commit()
 
     flash("Password changed successfully.", "success")
-    return redirect(url_for("dashboard") + "#settings")
+    return redirect(settings_return_url())
 
 
 @app.route("/settings/preferences", methods=["POST"])
-@login_required
+@permission_required("document.upload")
 def update_preferences():
-    """Save appearance and default analysis options from the Settings tab."""
-    preferences = get_user_preferences(session["user_id"], create_if_missing=True)
+    """Save the default analysis options (the Analysis defaults tab). Only
+    roles that upload documents have analysis defaults."""
+    preferences = get_user_preferences(g.current_user.id, create_if_missing=True)
     preferences.theme = pick_option(request.form.get("theme"), THEME_OPTIONS, preferences.theme)
     preferences.default_summary_depth = pick_option(
         request.form.get("default_summary_depth"), SUMMARY_DEPTH_OPTIONS, preferences.default_summary_depth)
@@ -909,26 +1217,40 @@ def update_preferences():
         request.form.get("default_context_hint"), CONTEXT_HINT_OPTIONS, preferences.default_context_hint)
     database.session.commit()
 
-    session["theme"] = preferences.theme
     flash("Preferences saved.", "success")
-    return redirect(url_for("dashboard") + "#settings")
+    return redirect(settings_return_url())
 
 
 @app.route("/settings/theme", methods=["POST"])
 @login_required
 def update_theme():
-    """Used by the sun/moon button in the sidebar. Called with fetch(), so it
-    returns JSON instead of redirecting. CSRF token arrives in X-CSRFToken."""
+    """Used by the sun/moon button and the Appearance tab. Called with fetch(),
+    so it returns JSON instead of redirecting. CSRF token arrives in X-CSRFToken."""
     request_data = request.get_json(silent=True) or {}
     requested_theme = request_data.get("theme")
     if requested_theme not in THEME_OPTIONS:
         return jsonify({"error": "Unknown theme"}), 400
 
-    preferences = get_user_preferences(session["user_id"], create_if_missing=True)
+    preferences = get_user_preferences(g.current_user.id, create_if_missing=True)
     preferences.theme = requested_theme
     database.session.commit()
-    session["theme"] = requested_theme
     return jsonify({"theme": requested_theme})
+
+
+@app.route("/settings/sidebar", methods=["POST"])
+@login_required
+def update_sidebar_state():
+    """Remembers whether the sidebar is collapsed, per person, so it follows
+    them across devices. Called with fetch(); returns JSON."""
+    request_data = request.get_json(silent=True) or {}
+    collapsed = request_data.get("collapsed")
+    if not isinstance(collapsed, bool):
+        return jsonify({"error": "collapsed must be true or false"}), 400
+
+    preferences = get_user_preferences(g.current_user.id, create_if_missing=True)
+    preferences.sidebar_collapsed = collapsed
+    database.session.commit()
+    return jsonify({"collapsed": collapsed})
 
 
 @app.errorhandler(413)
@@ -958,6 +1280,7 @@ def forgot_password():
             token = secrets.token_urlsafe(32)
             user.reset_token = token
             user.reset_token_expiry = datetime.now(timezone.utc) + timedelta(hours=1)
+            record_audit_event("auth.reset_requested", "user", user.id)
             database.session.commit()
 
             reset_link = url_for("reset_password", token=token, _external=True)
@@ -1002,6 +1325,7 @@ def reset_password(token):
         user.password_hash = generate_password_hash(new_password)
         user.reset_token = None
         user.reset_token_expiry = None
+        record_audit_event("auth.reset_completed", "user", user.id, actor=user)
         database.session.commit()
 
         flash("Password reset successfully. Please log in.", "success")
@@ -1011,15 +1335,9 @@ def reset_password(token):
 
 
 @app.route("/document/<int:document_id>/delete", methods=["POST"])
-@login_required
+@permission_required("document.delete_own")
 def delete_document(document_id):
-    document = database.session.get(Document, document_id)
-    if document is None:
-        abort(404)
-
-    if document.user_id != session["user_id"]:
-        flash("You do not have access to that document.")
-        return redirect(url_for("dashboard"))
+    document = get_document_or_404(document_id, "delete")
 
     file_path = os.path.join(app.config["UPLOAD_FOLDER"], document.stored_name)
     try:
@@ -1028,6 +1346,7 @@ def delete_document(document_id):
     except OSError:
         pass
 
+    record_audit_event("document.deleted", "document", document.id, details={"file_name": document.file_name})
     ExtractedClause.query.filter_by(document_id=document.id).delete()
     database.session.delete(document)
     database.session.commit()
@@ -1037,15 +1356,9 @@ def delete_document(document_id):
 
 
 @app.route("/document/<int:document_id>/download")
-@login_required
+@permission_required("document.export_own")
 def download_document(document_id):
-    document = database.session.get(Document, document_id)
-    if document is None:
-        abort(404)
-
-    if document.user_id != session["user_id"]:
-        flash("You do not have access to that document.")
-        return redirect(url_for("dashboard"))
+    document = get_document_or_404(document_id, "export")
 
     if not original_file_exists(document):
         flash(
@@ -1054,6 +1367,8 @@ def download_document(document_id):
         )
         return redirect(url_for("view_document", document_id=document.id))
 
+    record_audit_event("document.downloaded", "document", document.id,
+                       details={"file_name": document.file_name}, commit=True)
     return attach_download_token(send_from_directory(
         app.config["UPLOAD_FOLDER"],
         document.stored_name,
@@ -1063,17 +1378,12 @@ def download_document(document_id):
 
 
 @app.route("/document/<int:document_id>/reassess", methods=["POST"])
-@login_required
+@permission_required("document.view_own")
 def reassess_document(document_id):
     """Re-run only the Gemini risk assessment for clauses that came back as
     'Review' (API busy, timeout, no key at the time). The summary and the
     clauses themselves are kept; no re-upload needed."""
-    document = database.session.get(Document, document_id)
-    if document is None:
-        abort(404)
-    if document.user_id != session["user_id"]:
-        flash("You do not have access to that document.")
-        return redirect(url_for("dashboard"))
+    document = get_document_or_404(document_id, "view")
 
     pending_clauses = [clause for clause in document.clauses if clause.risk_severity == "Review"]
     if not pending_clauses:
@@ -1096,6 +1406,8 @@ def reassess_document(document_id):
         clause.explanation = assessed.get("explanation", "")
         if clause.risk_severity != "Review":
             newly_assessed_count += 1
+    record_audit_event("document.reassessed", "document", document.id, details={
+        "file_name": document.file_name, "clauses_rated": newly_assessed_count, "clauses_pending": len(pending_clauses)})
     database.session.commit()
 
     if newly_assessed_count == len(pending_clauses):
@@ -1103,6 +1415,266 @@ def reassess_document(document_id):
     else:
         flash("The AI service is still busy. Please try again in a minute.")
     return redirect(url_for("view_document", document_id=document.id))
+
+
+# ---------------------------------------------------------------------------
+# Administrator pages (increment 7)
+# ---------------------------------------------------------------------------
+# Plain-language names for audit actions, used on the Audit Log page and its filter
+AUDIT_ACTION_LABELS = {
+    "auth.login_succeeded": "Signed in",
+    "auth.login_failed": "Sign-in failed",
+    "auth.login_blocked": "Sign-in refused (account deactivated)",
+    "auth.logout": "Signed out",
+    "auth.password_changed": "Password changed",
+    "auth.reset_requested": "Password reset requested",
+    "auth.reset_completed": "Password reset completed",
+    "user.registered": "Account registered",
+    "user.profile_updated": "Profile updated",
+    "user.role_changed": "Role changed",
+    "user.deactivated": "Account deactivated",
+    "user.reactivated": "Account restored",
+    "document.uploaded": "Document uploaded",
+    "document.exported": "Report exported",
+    "document.downloaded": "Original file downloaded",
+    "document.deleted": "Document deleted",
+    "document.reassessed": "Risk assessment re-run",
+    "access.denied": "Access refused",
+    "audit.pruned": "Old audit entries removed",
+}
+
+
+@app.template_filter("audit_action_label")
+def audit_action_label_filter(action):
+    return AUDIT_ACTION_LABELS.get(action, action)
+
+
+def roles_in_display_order():
+    roles_by_name = {role.name: role for role in Role.query.all()}
+    return [roles_by_name[name] for name in ROLE_ORDER if name in roles_by_name]
+
+
+def like_pattern(search_text):
+    """Case-insensitive 'contains' pattern, with % and _ typed by the user
+    treated as ordinary characters."""
+    escaped_text = search_text.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped_text}%"
+
+
+def naive_utc(datetime_value):
+    """Dates are stored as UTC without a timezone marker; compare like with like."""
+    return as_utc(datetime_value).replace(tzinfo=None)
+
+
+def admin_users_return_url():
+    """Back to the Users list the admin was on (same search and page)."""
+    return_path = request.form.get("return_to", "")
+    if not return_path.startswith(url_for("admin_users")):
+        return_path = url_for("admin_users")
+    return return_path
+
+
+def render_admin_overview():
+    active_counts_by_role = dict(
+        database.session.query(Role.name, database.func.count(User.id))
+        .outerjoin(User, (User.role_id == Role.id) & User.is_active.is_(True))
+        .group_by(Role.name).all()
+    )
+    week_start = naive_utc(datetime.now(timezone.utc) - timedelta(days=7))
+    recent_events = (
+        AuditLog.query.order_by(AuditLog.occurred_at.desc(), AuditLog.id.desc()).limit(8).all()
+        if has_permission(g.current_user, "audit.view") else []
+    )
+    return render_template(
+        "admin_overview.html",
+        active_view="overview",
+        roles=roles_in_display_order(),
+        active_counts_by_role=active_counts_by_role,
+        deactivated_count=User.query.filter(User.is_active.is_(False)).count(),
+        # Counts only: Administrators never see document names or contents here
+        documents_total=Document.query.count(),
+        documents_this_week=Document.query.filter(Document.upload_date >= week_start).count(),
+        recent_events=recent_events,
+    )
+
+
+@app.route("/admin/users")
+@permission_required("user.view_all")
+def admin_users():
+    search_text = request.args.get("q", "").strip()[:120]
+    role_filter = request.args.get("role", "")
+    page_number = request.args.get("page", 1, type=int)
+
+    users_query = User.query.join(Role)
+    if search_text:
+        pattern = like_pattern(search_text)
+        users_query = users_query.filter(database.or_(
+            database.func.lower(User.full_name).like(pattern, escape="\\"),
+            User.email.like(pattern, escape="\\"),
+        ))
+    if role_filter in ROLE_ORDER:
+        users_query = users_query.filter(Role.name == role_filter)
+    users_page = users_query.order_by(database.func.lower(User.full_name), User.id).paginate(
+        page=page_number, per_page=USERS_PER_PAGE, error_out=False)
+
+    return render_template(
+        "admin_users.html",
+        active_view="users",
+        users_page=users_page,
+        roles=roles_in_display_order(),
+        search_text=search_text,
+        role_filter=role_filter if role_filter in ROLE_ORDER else "",
+        can_change_roles=has_permission(g.current_user, "user.change_role"),
+        can_deactivate=has_permission(g.current_user, "user.deactivate"),
+        return_to=request.full_path,
+    )
+
+
+@app.route("/admin/users/<int:user_id>/role", methods=["POST"])
+@permission_required("user.change_role")
+def admin_change_role(user_id):
+    target_user = database.session.get(User, user_id)
+    if target_user is None:
+        abort(404)
+    new_role_name = request.form.get("role", "")
+
+    if new_role_name not in ROLE_ORDER:
+        flash("Choose a valid role.")
+        return redirect(admin_users_return_url())
+    if target_user.id == g.current_user.id:
+        flash("You cannot change your own role. Ask another Administrator to do it.")
+        return redirect(admin_users_return_url())
+
+    old_role_name = target_user.role.name
+    if new_role_name == old_role_name:
+        flash(f"{target_user.full_name} is already a {target_user.role.label}.", "success")
+        return redirect(admin_users_return_url())
+    if old_role_name == ROLE_ADMIN and target_user.is_active and count_active_admins(lock_rows=True) <= 1:
+        database.session.rollback()
+        flash("This is the last active Administrator. Make someone else an Administrator first.")
+        return redirect(admin_users_return_url())
+
+    new_role = role_by_name(new_role_name)
+    target_user.role = new_role
+    record_audit_event("user.role_changed", "user", target_user.id, details={
+        "name": target_user.full_name, "email": target_user.email, "from": old_role_name, "to": new_role_name})
+    database.session.commit()
+    flash(f"{target_user.full_name} is now a {new_role.label}. It applies from their next click.", "success")
+    return redirect(admin_users_return_url())
+
+
+@app.route("/admin/users/<int:user_id>/status", methods=["POST"])
+@permission_required("user.deactivate")
+def admin_change_status(user_id):
+    """Deactivate or restore an account. Accounts are never deleted, so their
+    documents and audit history stay intact."""
+    target_user = database.session.get(User, user_id)
+    if target_user is None:
+        abort(404)
+    requested_action = request.form.get("action", "")
+
+    if requested_action == "deactivate":
+        if target_user.id == g.current_user.id:
+            flash("You cannot deactivate your own account.")
+            return redirect(admin_users_return_url())
+        if not target_user.is_active:
+            return redirect(admin_users_return_url())
+        if target_user.role.name == ROLE_ADMIN and count_active_admins(lock_rows=True) <= 1:
+            database.session.rollback()
+            flash("This is the last active Administrator and cannot be deactivated.")
+            return redirect(admin_users_return_url())
+        target_user.is_active = False
+        record_audit_event("user.deactivated", "user", target_user.id,
+                           details={"name": target_user.full_name, "email": target_user.email})
+        database.session.commit()
+        flash(f"{target_user.full_name}'s account is deactivated. They are signed out at their next click.", "success")
+    elif requested_action == "restore":
+        if target_user.is_active:
+            return redirect(admin_users_return_url())
+        target_user.is_active = True
+        record_audit_event("user.reactivated", "user", target_user.id,
+                           details={"name": target_user.full_name, "email": target_user.email})
+        database.session.commit()
+        flash(f"{target_user.full_name}'s account is restored.", "success")
+    else:
+        flash("Unknown action.")
+    return redirect(admin_users_return_url())
+
+
+@app.route("/admin/roles")
+@permission_required("user.change_role")
+def admin_roles():
+    """The live role-permission matrix, read from the database. Read-only."""
+    roles = roles_in_display_order()
+    active_counts_by_role = dict(
+        database.session.query(User.role_id, database.func.count(User.id))
+        .filter(User.is_active.is_(True)).group_by(User.role_id).all()
+    )
+    return render_template(
+        "admin_roles.html",
+        active_view="roles",
+        roles=roles,
+        permissions=Permission.query.order_by(Permission.id).all(),
+        permission_names_by_role={role.id: role.permission_names for role in roles},
+        active_counts_by_role=active_counts_by_role,
+    )
+
+
+@app.route("/admin/audit")
+@permission_required("audit.view")
+def admin_audit():
+    person_filter = request.args.get("person", "").strip()[:120]
+    action_filter = request.args.get("action", "")
+    date_from_text = request.args.get("from", "")
+    date_to_text = request.args.get("to", "")
+    page_number = request.args.get("page", 1, type=int)
+
+    entries_query = AuditLog.query
+    if person_filter:
+        pattern = like_pattern(person_filter)
+        matching_user_ids = [user_id for (user_id,) in database.session.query(User.id).filter(database.or_(
+            database.func.lower(User.full_name).like(pattern, escape="\\"),
+            User.email.like(pattern, escape="\\"),
+        ))]
+        # Also finds failed sign-ins, which record the email typed but no person
+        entries_query = entries_query.filter(database.or_(
+            AuditLog.actor_user_id.in_(matching_user_ids),
+            database.and_(AuditLog.target_type == "user", AuditLog.target_id.in_(matching_user_ids)),
+            database.func.lower(AuditLog.details).like(pattern, escape="\\"),
+        ))
+    if action_filter in AUDIT_ACTION_LABELS:
+        entries_query = entries_query.filter(AuditLog.action == action_filter)
+
+    filter_problems = []
+    try:
+        if date_from_text:
+            entries_query = entries_query.filter(
+                AuditLog.occurred_at >= datetime.strptime(date_from_text, "%Y-%m-%d"))
+        if date_to_text:
+            entries_query = entries_query.filter(
+                AuditLog.occurred_at < datetime.strptime(date_to_text, "%Y-%m-%d") + timedelta(days=1))
+    except ValueError:
+        filter_problems.append("Dates must look like 2026-10-14.")
+
+    entries_page = entries_query.order_by(AuditLog.occurred_at.desc(), AuditLog.id.desc()).paginate(
+        page=page_number, per_page=AUDIT_ENTRIES_PER_PAGE, error_out=False)
+    return render_template(
+        "admin_audit.html",
+        active_view="audit",
+        entries_page=entries_page,
+        action_labels=AUDIT_ACTION_LABELS,
+        person_filter=person_filter,
+        action_filter=action_filter if action_filter in AUDIT_ACTION_LABELS else "",
+        date_from_text=date_from_text,
+        date_to_text=date_to_text,
+        filter_problems=filter_problems,
+    )
+
+
+@app.errorhandler(404)
+def page_not_found(error):
+    """One plain page for anything missing or not allowed (see deny_access)."""
+    return render_template("not_found.html"), 404
 
 
 @app.route("/favicon.ico")
@@ -1131,9 +1703,96 @@ from provisions import (  # noqa: E402
 from report_export import build_report_content, export_docx, export_pdf, report_filename  # noqa: E402
 
 
-# Create any missing tables on startup (does not alter existing tables).
-with app.app_context():
-    database.create_all()
+# ---------------------------------------------------------------------------
+# Start-up: database schema and the first Administrator
+# ---------------------------------------------------------------------------
+# Arbitrary number that names Chambua's migration lock in PostgreSQL
+MIGRATION_LOCK_KEY = 72310007
+
+
+def prepare_database():
+    """Bring the database up to the latest migration (replaces the old
+    database.create_all()). Safe on every start-up: already-applied
+    migrations are skipped. A database from before increment 7 has no
+    migration history; the baseline migration recognises its existing tables
+    and leaves them as they are, then the roles migration runs.
+
+    On PostgreSQL a lock makes sure only one process migrates at a time, if
+    the server ever runs several workers."""
+    with app.app_context():
+        engine = database.engine
+        if engine.dialect.name != "postgresql":
+            upgrade_database_schema()
+            return
+        with engine.connect() as lock_connection:
+            lock_connection.execute(sqlalchemy.text("SELECT pg_advisory_lock(:key)"), {"key": MIGRATION_LOCK_KEY})
+            try:
+                upgrade_database_schema()
+            finally:
+                lock_connection.execute(sqlalchemy.text("SELECT pg_advisory_unlock(:key)"), {"key": MIGRATION_LOCK_KEY})
+                lock_connection.commit()
+
+
+def promote_to_admin(user, source):
+    old_role_name = user.role.name
+    user.role = role_by_name(ROLE_ADMIN)
+    record_audit_event("user.role_changed", "user", user.id, details={
+        "name": user.full_name, "email": user.email, "from": old_role_name, "to": ROLE_ADMIN, "source": source})
+    database.session.commit()
+
+
+def promote_initial_admin_from_environment():
+    """INITIAL_ADMIN_EMAIL: on a server with no shell (Render's free tier), this
+    is how the first Administrator is made. It does nothing once any
+    Administrator exists, so leaving it set cannot be abused later."""
+    if not INITIAL_ADMIN_EMAIL:
+        return
+    with app.app_context():
+        admin_role = role_by_name(ROLE_ADMIN)
+        if User.query.filter_by(role_id=admin_role.id).first() is not None:
+            return
+        user = User.query.filter_by(email=INITIAL_ADMIN_EMAIL).first()
+        if user is None or not user.is_active:
+            app.logger.warning("INITIAL_ADMIN_EMAIL is set, but no active account uses %s. "
+                               "Register that account, then restart.", INITIAL_ADMIN_EMAIL)
+            return
+        promote_to_admin(user, "INITIAL_ADMIN_EMAIL")
+        app.logger.warning("%s is now the first Administrator. You can remove INITIAL_ADMIN_EMAIL.", user.email)
+
+
+@app.cli.command("create-admin")
+@click.argument("email")
+def create_admin_command(email):
+    """Make an existing account an Administrator: flask --app app create-admin EMAIL"""
+    user = User.query.filter_by(email=normalize_email(email)).first()
+    if user is None:
+        raise click.ClickException(f"No account uses {email}. Register it first.")
+    if user.role.name == ROLE_ADMIN:
+        click.echo(f"{user.email} is already an Administrator.")
+        return
+    promote_to_admin(user, "flask create-admin")
+    click.echo(f"{user.email} is now an Administrator.")
+
+
+@app.cli.command("prune-audit-log")
+@click.option("--months", default=24, show_default=True, help="Keep entries newer than this many months.")
+def prune_audit_log_command(months):
+    """Delete audit entries older than the retention period (24 months by
+    default), as the Data Protection Act expects. Run it on a schedule."""
+    if months < 1:
+        raise click.ClickException("--months must be at least 1.")
+    cutoff = naive_utc(datetime.now(timezone.utc) - timedelta(days=30 * months))
+    deleted_count = AuditLog.query.filter(AuditLog.occurred_at < cutoff).delete(synchronize_session=False)
+    record_audit_event("audit.pruned", details={"entries_removed": deleted_count, "older_than_months": months})
+    database.session.commit()
+    click.echo(f"Removed {deleted_count} audit entries older than {months} months.")
+
+
+# AUTO_MIGRATE=0 skips the start-up migration, for running a single
+# "flask db ..." command by hand. Leave it unset on Render.
+if os.environ.get("AUTO_MIGRATE", "1") != "0":
+    prepare_database()
+    promote_initial_admin_from_environment()
 
 if __name__ == "__main__":
     debug_mode = os.environ.get("FLASK_DEBUG") == "1"

@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Roles &amp; Permissions · {{ brand_name }}{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Roles &amp; Permissions</h1>
+<p class="page-intro">This is the access policy the server enforces, read live from the database. Each person has one role;
+  each role holds the permissions ticked below. Anything not ticked is refused.</p>
+
+<div class="role-cards">
+  {% for role in roles %}
+  <div class="card role-card">
+    <div class="role-card-header">
+      <span class="role-badge role-{{ role.name }}">{{ role.label }}</span>
+      <span class="audit-subtle">{{ active_counts_by_role.get(role.id, 0) }} active</span>
+    </div>
+    <p>{{ role.description }}</p>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <div class="card-title"><i class="fa-solid fa-table-cells" style="color: var(--primary-green);"></i> Permission matrix</div>
+    <span class="card-description" style="margin: 0;">{{ permissions | length }} permissions &middot; read-only</span>
+  </div>
+  <div class="table-scroll-wrapper">
+    <table class="data-table permission-matrix">
+      <caption class="sr-only">Which role holds each permission</caption>
+      <thead>
+        <tr>
+          <th scope="col">Permission</th>
+          {% for role in roles %}<th scope="col" class="matrix-role">{{ role.label }}</th>{% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for permission in permissions %}
+        <tr>
+          <th scope="row">
+            <span class="permission-description">{{ permission.description }}</span>
+            <code>{{ permission.code_name }}</code>
+          </th>
+          {% for role in roles %}
+          <td class="matrix-cell">
+            {% if permission.code_name in permission_names_by_role[role.id] %}
+              <i class="fa-solid fa-check matrix-yes" aria-hidden="true"></i><span class="sr-only">Yes</span>
+            {% else %}
+              <span class="matrix-no" aria-hidden="true">&middot;</span><span class="sr-only">No</span>
+            {% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="settings-note">
+    <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
+    Besides these permissions, ownership is always checked: a Member reaches only their own documents. Review
+    permissions take effect with the review workflow.
+  </p>
+</div>
+{% endblock %}

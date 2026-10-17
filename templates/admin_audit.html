@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% import "_audit_details.html" as audit with context %}
+{% import "_pagination.html" as pagination with context %}
+{% block title %}Audit Log · {{ brand_name }}{% endblock %}
+
+{% block content %}
+<h1 class="page-title">Audit Log</h1>
+<p class="page-intro">A permanent record of who did what, and when. Entries can't be edited or deleted from the app,
+  and never contain passwords or contract text.</p>
+
+<form class="filter-bar card" method="GET" action="{{ url_for('admin_audit') }}" role="search" data-no-busy>
+  <div class="field-group">
+    <label for="audit-person">Person</label>
+    <input type="search" id="audit-person" name="person" value="{{ person_filter }}" maxlength="120" placeholder="Name or email">
+  </div>
+  <div class="field-group">
+    <label for="audit-action">Action</label>
+    <select id="audit-action" name="action">
+      <option value="">All actions</option>
+      {% for action_code, action_label in action_labels | dictsort(by='value') %}
+        <option value="{{ action_code }}" {% if action_filter == action_code %}selected{% endif %}>{{ action_label }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="field-group">
+    <label for="audit-from">From (UTC)</label>
+    <input type="date" id="audit-from" name="from" value="{{ date_from_text }}">
+  </div>
+  <div class="field-group">
+    <label for="audit-to">To (UTC)</label>
+    <input type="date" id="audit-to" name="to" value="{{ date_to_text }}">
+  </div>
+  <div class="filter-actions">
+    <button type="submit" class="btn-submit-analysis"><i class="fa-solid fa-filter"></i> Filter</button>
+    {% if person_filter or action_filter or date_from_text or date_to_text %}<a class="text-link" href="{{ url_for('admin_audit') }}">Clear</a>{% endif %}
+  </div>
+</form>
+
+{% for problem in filter_problems %}<div class="inline-notice" role="alert">{{ problem }}</div>{% endfor %}
+
+<div class="card">
+  <div class="table-scroll-wrapper">
+    <table class="data-table audit-table">
+      <thead><tr><th>When</th><th>Who</th><th>Role then</th><th>What</th><th>Details</th><th>IP address</th></tr></thead>
+      <tbody>
+        {% for entry in entries_page.items %}
+        <tr class="{{ 'row-warning' if entry.action in ('access.denied', 'auth.login_failed', 'auth.login_blocked') }}">
+          <td><time datetime="{{ entry.occurred_at | iso_utc }}" data-local-format="datetime">{{ entry.occurred_at.strftime('%b %d, %Y %H:%M') }} UTC</time></td>
+          <td>{{ audit.actor(entry) }}</td>
+          <td>{% if entry.actor_role %}<span class="role-badge role-{{ entry.actor_role }}">{{ {'member': 'Member', 'reviewer': 'Reviewer', 'admin': 'Administrator'}.get(entry.actor_role, entry.actor_role) }}</span>{% endif %}</td>
+          <td>{{ entry.action | audit_action_label }}</td>
+          <td>{{ audit.details(entry) }}</td>
+          <td><span class="audit-subtle">{{ entry.ip_address or '' }}</span></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty-state">No entries match these filters.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {{ pagination.pager(entries_page, 'admin_audit', 'entries') }}
+</div>
+{% endblock %}

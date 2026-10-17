@@ -144,8 +144,15 @@ a { color: var(--primary-green); }
 }
 
 /* ---------- Sidebar ---------- */
+/* One width drives the sidebar, the main area's offset and the animation.
+   <html data-sidebar="collapsed"> is set by the server before the page draws,
+   so a collapsed sidebar never flickers open on load. */
+:root { --sidebar-width: 260px; --sidebar-collapsed-width: 72px; }
+:root[data-sidebar="collapsed"] { --sidebar-current-width: var(--sidebar-collapsed-width); }
+:root:not([data-sidebar="collapsed"]) { --sidebar-current-width: var(--sidebar-width); }
+
 .sidebar {
-  width: 260px;
+  width: var(--sidebar-current-width);
   background: var(--card-bg);
   border-right: 1px solid var(--border-color);
   display: flex;
@@ -157,7 +164,63 @@ a { color: var(--primary-green); }
   overflow-y: auto;
   z-index: 10;
   transform: translateX(0);
-  transition: transform 0.25s ease, background-color 0.2s ease;
+  transition: transform 0.25s ease, width 0.2s ease, background-color 0.2s ease;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.sidebar-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 20px;
+}
+
+.sidebar-toggle {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.sidebar-toggle:hover { background: var(--surface-hover); color: var(--text-main); }
+.toggle-icon-open, .toggle-icon-close { display: flex; }
+:root[data-sidebar="collapsed"] .toggle-icon-close,
+:root:not([data-sidebar="collapsed"]) .toggle-icon-open { display: none; }
+
+/* Collapsed (desktop only): icons in a narrow strip, names as hover labels.
+   The names stay readable by screen readers (visually hidden, not removed). */
+@media (min-width: 901px) {
+  :root[data-sidebar="collapsed"] .sidebar { padding: 20px 12px; }
+  :root[data-sidebar="collapsed"] .sidebar-top { flex-direction: column; padding-bottom: 16px; }
+  :root[data-sidebar="collapsed"] .brand-logo { padding: 0; }
+  :root[data-sidebar="collapsed"] .sidebar-brand-text { display: none; }
+  :root[data-sidebar="collapsed"] .nav-item .nav-link { justify-content: center; padding: 12px 0; position: relative; }
+  :root[data-sidebar="collapsed"] .nav-label {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+  }
+  :root[data-sidebar="collapsed"] .nav-link:hover::after,
+  :root[data-sidebar="collapsed"] .nav-link:focus-visible::after {
+    content: attr(data-label);
+    position: fixed;
+    left: calc(var(--sidebar-collapsed-width) + 6px);
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: var(--text-main);
+    color: var(--card-bg);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 20;
+  }
 }
 
 /* Brand: logo mark colours follow the theme; the bars keep risk colours */
@@ -172,8 +235,9 @@ a { color: var(--primary-green); }
   align-items: center;
   gap: 10px;
   color: var(--text-main);
-  padding: 0 12px 24px 12px;
+  padding: 0 4px 0 12px;
   text-decoration: none;
+  min-width: 0;
 }
 
 .brand-mark-svg { flex-shrink: 0; display: block; }
@@ -226,54 +290,18 @@ a { color: var(--primary-green); }
   font-weight: 600;
 }
 
-.sidebar-footer {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.user-profile {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border-color);
-}
-
-.user-info {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
 .avatar {
   width: 36px;
   height: 36px;
   flex-shrink: 0;
   border-radius: 50%;
-  background: var(--avatar-bg);
+  background: hsl(var(--avatar-hue, 160), 55%, 36%);  /* hue per person; fixed lightness keeps white text readable */
   color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
   font-weight: 600;
   font-size: 14px;
-}
-
-.user-details h4 {
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.sidebar-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }
 
 .icon-button {
@@ -303,12 +331,14 @@ a { color: var(--primary-green); }
 
 /* ---------- Main layout ---------- */
 .main-wrapper {
-  margin-left: 260px;
+  margin-left: var(--sidebar-current-width);
   flex: 1;
-  padding: 32px 40px;
-  max-width: 1200px;
-  transition: margin-left 0.25s ease;
+  padding: 16px 40px 32px;
+  max-width: calc(1200px + var(--sidebar-current-width));
+  min-width: 0;
+  transition: margin-left 0.2s ease;
 }
+.main-wrapper:focus { outline: none; }
 
 .page-title {
   font-size: 24px;
@@ -1004,25 +1034,6 @@ a { color: var(--primary-green); }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 /* ---------- Mobile navigation ---------- */
-.menu-toggle-btn {
-  display: none;
-  position: fixed;
-  top: 16px;
-  left: 16px;
-  z-index: 1001;
-  width: 44px;
-  height: 44px;
-  border-radius: 10px;
-  background: var(--card-bg);
-  color: var(--text-main);
-  border: 1px solid var(--border-color);
-  align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-}
-
 .mobile-overlay {
   display: none;
   position: fixed;
@@ -1035,14 +1046,17 @@ a { color: var(--primary-green); }
 
 @media (max-width: 900px) {
   body { flex-direction: column; }
-  .menu-toggle-btn { display: flex; }
-  .sidebar { z-index: 1000; padding-top: 76px; }
-  body:not(.sidebar-open) .sidebar { transform: translateX(-100%); }
+  /* Phones: the sidebar is a full-width drawer that slides in over the page */
+  .sidebar { --sidebar-current-width: var(--sidebar-width); z-index: 1000; box-shadow: var(--shadow-raised); }
+  body:not(.sidebar-open) .sidebar { transform: translateX(-100%); visibility: hidden; }
+  body.sidebar-open .sidebar { visibility: visible; }
+  .toggle-icon-open { display: none !important; }
+  .toggle-icon-close { display: flex !important; }
   .main-wrapper {
     margin-left: 0;
     max-width: 100%;
     width: 100%;
-    padding: 76px 20px 20px;
+    padding: 12px 16px 20px;
   }
   .controls-grid.two-columns { grid-template-columns: 1fr; }
   .notice-banner { flex-direction: column; align-items: flex-start; }

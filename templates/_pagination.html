@@ -1,0 +1,17 @@
+{# Previous / next links that keep the current filters (request.args). #}
+{% macro pager(page_object, endpoint, item_name) -%}
+  {% if page_object.pages > 1 %}
+  {% set current_arguments = request.args.to_dict() %}
+  <nav class="pager" aria-label="{{ item_name | capitalize }} pages">
+    {% if page_object.has_prev %}
+      {% set _ = current_arguments.update({'page': page_object.prev_num}) %}
+      <a class="btn-secondary" href="{{ url_for(endpoint, **current_arguments) }}"><i class="fa-solid fa-chevron-left"></i> Previous</a>
+    {% else %}<span></span>{% endif %}
+    <span class="pager-status">Page {{ page_object.page }} of {{ page_object.pages }} &middot; {{ page_object.total }} {{ item_name }}</span>
+    {% if page_object.has_next %}
+      {% set _ = current_arguments.update({'page': page_object.next_num}) %}
+      <a class="btn-secondary" href="{{ url_for(endpoint, **current_arguments) }}">Next <i class="fa-solid fa-chevron-right"></i></a>
+    {% else %}<span></span>{% endif %}
+  </nav>
+  {% endif %}
+{%- endmacro %}
