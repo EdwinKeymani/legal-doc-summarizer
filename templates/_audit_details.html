@@ -8,15 +8,15 @@
   {% endif %}
 {%- endmacro %}
 
+{# Readable lines from audit_detail_lines() in app.py. Empty when there is
+   nothing to add (e.g. "Signed in": the account is the person under "Who"). #}
 {% macro details(entry) -%}
-  {% set entry_details = entry.details_dict %}
-  {% if entry_details %}
+  {% set detail_lines = audit_detail_lines(entry) %}
+  {% if detail_lines %}
     <dl class="audit-details">
-      {% for key, value in entry_details.items() %}
-        <div><dt>{{ key | replace('_', ' ') }}</dt><dd>{{ value }}</dd></div>
+      {% for label, value in detail_lines %}
+        <div><dt>{{ label }}</dt><dd>{% if value is not string and value is sequence %}{{ value[0] }}<span class="audit-subtle">{{ value[1] }}</span>{% else %}{{ value }}{% endif %}</dd></div>
       {% endfor %}
     </dl>
-  {% elif entry.target_type %}
-    <span class="audit-subtle">{{ entry.target_type }} {{ entry.target_id }}</span>
   {% endif %}
 {%- endmacro %}

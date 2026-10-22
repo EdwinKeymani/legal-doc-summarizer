@@ -26,12 +26,15 @@ logger = logging.getLogger('alembic.env')
 
 
 def get_engine():
+    # Flask-SQLAlchemy 3 (the version Chambua uses) exposes db.engine. Asking
+    # for it first avoids the deprecated db.get_engine(), which printed a
+    # warning on every start and is removed in Flask-SQLAlchemy 3.2.
+    database = current_app.extensions['migrate'].db
     try:
-        # this works with Flask-SQLAlchemy<3 and Alchemical
-        return current_app.extensions['migrate'].db.get_engine()
+        return database.engine
     except (TypeError, AttributeError):
-        # this works with Flask-SQLAlchemy>=3
-        return current_app.extensions['migrate'].db.engine
+        # older Flask-SQLAlchemy (<3) and Alchemical
+        return database.get_engine()
 
 
 def get_engine_url():

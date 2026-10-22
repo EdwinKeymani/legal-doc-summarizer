@@ -7,12 +7,15 @@
 
 :root {
   color-scheme: light;
-  --primary-green: #16a34a;
-  --primary-hover: #15803d;
+  /* Text-safe greens and reds: at least 4.5:1 on white (WCAG AA) */
+  --primary-green: #15803d;
+  --primary-hover: #166534;
   --primary-light: #f0fdf4;
   --primary-border: #bbf7d0;
-  --button-bg: #16a34a;
+  --button-bg: #15803d;
   --button-text: #ffffff;
+  --danger-button-bg: #dc2626;
+  --danger-button-hover: #b91c1c;
 
   --bg-page: #f8fafc;
   --card-bg: #ffffff;
@@ -24,10 +27,10 @@
 
   --text-main: #0f172a;
   --text-body: #374151;
-  --text-muted: #64748b;
+  --text-muted: #5b6779;   /* 5.2:1 or better on every light surface */
   --border-color: #e2e8f0;
 
-  --danger: #ef4444;
+  --danger: #dc2626;
   --danger-text: #b91c1c;
   --danger-bg: #fef2f2;
   --danger-border: #fecaca;
@@ -46,11 +49,13 @@
 :root[data-theme="dark"] {
   color-scheme: dark;
   --primary-green: #22c55e;
-  --primary-hover: #16a34a;
+  --primary-hover: #166534;
   --primary-light: rgba(34, 197, 94, 0.12);
   --primary-border: rgba(34, 197, 94, 0.35);
-  --button-bg: #16a34a;
+  --button-bg: #15803d;
   --button-text: #ffffff;
+  --danger-button-bg: #dc2626;
+  --danger-button-hover: #b91c1c;
 
   --bg-page: #0b1120;
   --card-bg: #111827;
@@ -86,11 +91,13 @@
   :root:not([data-theme="light"]) {
     color-scheme: dark;
     --primary-green: #22c55e;
-    --primary-hover: #16a34a;
+    --primary-hover: #166534;
     --primary-light: rgba(34, 197, 94, 0.12);
     --primary-border: rgba(34, 197, 94, 0.35);
-    --button-bg: #16a34a;
+    --button-bg: #15803d;
     --button-text: #ffffff;
+    --danger-button-bg: #dc2626;
+    --danger-button-hover: #b91c1c;
     --bg-page: #0b1120;
     --card-bg: #111827;
     --surface-muted: #162032;
@@ -206,22 +213,40 @@ a { color: var(--primary-green); }
   :root[data-sidebar="collapsed"] .nav-label {
     position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
   }
-  :root[data-sidebar="collapsed"] .nav-link:hover::after,
-  :root[data-sidebar="collapsed"] .nav-link:focus-visible::after {
-    content: attr(data-label);
-    position: fixed;
-    left: calc(var(--sidebar-collapsed-width) + 6px);
-    padding: 6px 10px;
-    border-radius: 6px;
-    background: var(--text-main);
-    color: var(--card-bg);
-    font-size: 12px;
-    font-weight: 600;
-    white-space: nowrap;
-    pointer-events: none;
-    z-index: 20;
-  }
 }
+
+/* Hover label beside a collapsed-sidebar icon (created by ui.js, section 8) */
+.nav-tooltip {
+  position: fixed;
+  z-index: 60;
+  top: 0;
+  left: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: var(--text-main);
+  color: var(--card-bg);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.18);
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-4px, -50%);
+  transition: opacity 0.12s ease, transform 0.12s ease, visibility 0.12s;
+}
+.nav-tooltip::before {   /* small pointer towards the icon */
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  background: inherit;
+  transform: translateY(-50%) rotate(45deg);
+}
+.nav-tooltip.visible { opacity: 1; visibility: visible; transform: translate(0, -50%); }
+@media (prefers-reduced-motion: reduce) { .nav-tooltip { transition: none; } }
 
 /* Brand: logo mark colours follow the theme; the bars keep risk colours */
 :root { --brand-page: #ffffff; --brand-outline: #0f172a; --brand-dot: #dc2626; }
@@ -295,7 +320,7 @@ a { color: var(--primary-green); }
   height: 36px;
   flex-shrink: 0;
   border-radius: 50%;
-  background: hsl(var(--avatar-hue, 160), 55%, 36%);  /* hue per person; fixed lightness keeps white text readable */
+  background: hsl(var(--avatar-hue, 160), 55%, 30%);  /* hue per person; 30% lightness keeps white text at 4.5:1 or better on every hue */
   color: #ffffff;
   display: flex;
   align-items: center;
@@ -601,7 +626,8 @@ a { color: var(--primary-green); }
 }
 
 .report-actions a.btn-secondary { text-decoration: none; }
-.report-actions .btn-disabled { opacity: 0.5; pointer-events: none; }
+/* Unavailable action: dashed outline and muted (but still readable) text, not faded */
+.report-actions .btn-disabled { background: transparent; border-style: dashed; color: var(--text-muted); cursor: not-allowed; }
 
 /* Report page: key provisions */
 .provision-tabs {
@@ -689,10 +715,10 @@ a { color: var(--primary-green); }
 }
 
 .not-a-contract { margin-bottom: 20px; line-height: 1.55; }
-.not-a-contract .signal-detail { display: block; margin-top: 4px; font-size: 11.5px; opacity: 0.85; }
+.not-a-contract .signal-detail { display: block; margin-top: 4px; font-size: 11.5px; }
 
 .data-table tr.clause-hidden-by-level { display: none; }
-.data-table.show-all-clauses tr.clause-hidden-by-level { display: table-row; opacity: 0.75; }
+.data-table.show-all-clauses tr.clause-hidden-by-level { display: table-row; background: var(--surface-muted); }
 
 .form-stack {
   display: flex;
@@ -820,7 +846,8 @@ a { color: var(--primary-green); }
 
 .btn-secondary { background: var(--surface-hover); color: var(--text-main); }
 .btn-secondary:hover { border-color: var(--text-muted); }
-.btn-danger { background: var(--danger); color: #ffffff; border-color: transparent; }
+.btn-danger { background: var(--danger-button-bg); color: #ffffff; border-color: transparent; }
+.btn-danger:hover { background: var(--danger-button-hover); }
 
 .link-button {
   background: none;
@@ -884,6 +911,9 @@ a { color: var(--primary-green); }
   width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  /* Keeps hidden screen-reader labels inside table cells (position:absolute)
+     within this scrolling box; without it they escape it and widen the page */
+  position: relative;
 }
 
 .data-table {

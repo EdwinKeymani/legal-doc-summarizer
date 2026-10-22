@@ -229,9 +229,9 @@ input[aria-invalid="true"] {
   position: absolute; left: 16px; top: -48px; z-index: 2000;
   padding: 8px 14px; border-radius: 8px;
   background: var(--card-bg); color: var(--text-main); font-weight: 600; text-decoration: none;
-  box-shadow: var(--shadow-raised);
 }
-.skip-link:focus { top: 12px; }
+/* Shadow only while shown: off-screen, its blur used to bleed into the top-left corner */
+.skip-link:focus { top: 12px; box-shadow: var(--shadow-raised); }
 
 /* Role colours: one hue per role, readable in both themes */
 :root { --role-member: #0369a1; --role-member-bg: #e0f2fe; --role-reviewer: #6d28d9; --role-reviewer-bg: #ede9fe;
@@ -307,6 +307,10 @@ input[aria-invalid="true"] {
   background: var(--card-bg); color: var(--text-main); box-shadow: var(--shadow-raised);
 }
 .settings-dialog::backdrop, .confirm-dialog::backdrop { background: var(--overlay-bg); }
+/* While a window (or the phone menu) is open, the page behind it stays still.
+   ui.js sets the padding to the hidden scrollbar's width, so nothing shifts. */
+html.page-scroll-locked { overflow: hidden; padding-right: var(--scrollbar-compensation, 0px); }
+.settings-dialog, .confirm-dialog { overscroll-behavior: contain; }
 .settings-dialog { width: min(640px, calc(100vw - 32px)); max-height: calc(100vh - 48px); }
 .settings-dialog-header {
   display: flex; align-items: center; justify-content: space-between; padding: 18px 20px 8px;
@@ -369,11 +373,15 @@ input[aria-invalid="true"] {
 .row-warning td:first-child { box-shadow: inset 3px 0 0 var(--warning); }
 
 .audit-table td { vertical-align: top; }
-.audit-details { display: flex; flex-direction: column; gap: 2px; font-size: 12px; }
+/* Details gets the room; the short columns stay on one line */
+.audit-details-cell { width: 40%; min-width: 260px; }
+.audit-table td:first-child, .audit-table td:last-child { white-space: nowrap; }
+.audit-table td:nth-child(4) { min-width: 170px; }   /* "What", e.g. "Account deactivated", on one line */
+.audit-details { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; line-height: 1.45; }
 .audit-details div { display: flex; gap: 6px; }
-.audit-details dt { color: var(--text-muted); text-transform: capitalize; }
+.audit-details dt { color: var(--text-muted); white-space: nowrap; }
 .audit-details dt::after { content: ":"; }
-.audit-details dd { color: var(--text-main); word-break: break-word; }
+.audit-details dd { color: var(--text-main); overflow-wrap: anywhere; min-width: 0; }
 
 .role-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 4px; }
 .role-card p { font-size: 13px; line-height: 1.5; color: var(--text-body); margin-top: 10px; }

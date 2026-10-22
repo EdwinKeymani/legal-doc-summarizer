@@ -460,6 +460,7 @@
 
     function closeDeleteModal() {
       deleteModal.style.display = 'none';
+      window.lockPageScroll('delete', false);
       formToDelete = null;
     }
 
@@ -469,6 +470,7 @@
         const fileName = formToDelete.getAttribute('data-filename');
         deleteModalText.textContent = `Are you sure you want to delete "${fileName}"? This cannot be undone.`;
         deleteModal.style.display = 'flex';
+        window.lockPageScroll('delete', true);
         document.getElementById('delete-cancel-btn').focus();
       });
     });

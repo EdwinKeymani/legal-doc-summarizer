@@ -1,0 +1,4 @@
+# Test-only tools. Not installed on Render (its build uses requirements.txt).
+-r requirements.txt
+pytest>=8
+pytest-playwright>=0.7

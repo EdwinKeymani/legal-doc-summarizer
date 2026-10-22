@@ -8,9 +8,31 @@
  *   5. Account menu (signed-in pages).
  *   6. Settings window (signed-in pages).
  *   7. Confirmation dialog before sensitive admin actions.
+ *   8. Hover labels for the collapsed sidebar (desktop).
+ *   9. Wide tables: reachable by keyboard when they scroll sideways.
  */
 (function () {
   "use strict";
+
+  /* ---------- Page scroll lock ---------- */
+  // While a window is open (settings, a confirmation, the phone menu), the page
+  // behind it must not scroll. Each opener locks under its own name and unlocks
+  // on close, so one closing can't unlock another that is still open.
+  // Hiding the scrollbar would let the page widen and shift sideways, so the
+  // page is padded by the scrollbar's exact width (0 on phones and short pages).
+  var activeScrollLocks = {};
+  window.lockPageScroll = function (lockName, isLocked) {
+    var rootElement = document.documentElement;
+    var wasLocked = Object.keys(activeScrollLocks).length > 0;
+    if (isLocked) { activeScrollLocks[lockName] = true; } else { delete activeScrollLocks[lockName]; }
+    var nowLocked = Object.keys(activeScrollLocks).length > 0;
+    if (nowLocked && !wasLocked) {
+      var scrollbarWidth = window.innerWidth - rootElement.clientWidth;
+      rootElement.style.setProperty("--scrollbar-compensation", scrollbarWidth + "px");
+    }
+    rootElement.classList.toggle("page-scroll-locked", nowLocked);
+    if (!nowLocked) rootElement.style.removeProperty("--scrollbar-compensation");
+  };
 
   /* ---------- 1. Toasts ---------- */
 
@@ -388,6 +410,7 @@
     window.openSettings = function (tabName) {
       var chosenTab = selectTab(tabName, false);
       if (!dialog.open) dialog.showModal();
+      window.lockPageScroll("settings", true);
       // A modal dialog sits above everything else on the page, so messages
       // (e.g. "Current password is incorrect.") move inside it while it is open
       var toastStack = document.querySelector(".toast-stack");
@@ -415,6 +438,7 @@
     // A click on the dimmed backdrop (outside the box) closes it
     dialog.addEventListener("click", function (event) { if (event.target === dialog) dialog.close(); });
     dialog.addEventListener("close", function () {
+      window.lockPageScroll("settings", false);
       var toastStack = dialog.querySelector(".toast-stack");
       if (toastStack) document.body.appendChild(toastStack);
       if (/^#settings/.test(window.location.hash)) {
@@ -465,9 +489,11 @@
         document.getElementById("confirm-dialog-text").textContent = form.dataset.confirm;
         confirmButton.textContent = form.dataset.confirmButton || "Confirm";
         confirmDialog.showModal();
+        window.lockPageScroll("confirm", true);
       });
     });
     document.getElementById("confirm-dialog-cancel").addEventListener("click", function () { confirmDialog.close(); });
+    confirmDialog.addEventListener("close", function () { window.lockPageScroll("confirm", false); });
     confirmButton.addEventListener("click", function () {
       if (!pendingForm) return;
       pendingForm.dataset.confirmed = "true";
@@ -478,8 +504,90 @@
     });
   }
 
+
+  /* ---------- 8. Hover labels for the collapsed sidebar ----------
+     With the sidebar collapsed to icons, hovering or tabbing to an icon shows
+     its name beside it. The label lives on <body>, not inside the sidebar:
+     the sidebar scrolls and slides (a CSS transform), and either one would
+     clip a label drawn inside it. Screen readers already hear the link's
+     visually hidden name, so this label is hidden from them (aria-hidden). */
+  function setUpSidebarLabels() {
+    var sidebar = document.getElementById("app-sidebar");
+    if (!sidebar) return;
+    var desktopQuery = window.matchMedia("(min-width: 901px)");
+    var label = document.createElement("div");
+    label.className = "nav-tooltip";
+    label.setAttribute("aria-hidden", "true");
+    document.body.appendChild(label);
+
+    function sidebarIsCollapsed() {
+      return desktopQuery.matches && document.documentElement.getAttribute("data-sidebar") === "collapsed";
+    }
+    function showLabel(link) {
+      if (!sidebarIsCollapsed()) return;
+      var linkBox = link.getBoundingClientRect();
+      label.textContent = link.getAttribute("data-label");
+      label.style.top = (linkBox.top + linkBox.height / 2) + "px";
+      label.style.left = (sidebar.getBoundingClientRect().right + 10) + "px";
+      label.classList.add("visible");
+    }
+    function hideLabel() { label.classList.remove("visible"); }
+    function linkFrom(event) { return event.target.closest ? event.target.closest(".nav-link[data-label]") : null; }
+
+    sidebar.addEventListener("mouseover", function (event) { var link = linkFrom(event); if (link) showLabel(link); });
+    sidebar.addEventListener("mouseout", function (event) {
+      var link = linkFrom(event);
+      if (link && !link.contains(event.relatedTarget)) hideLabel();
+    });
+    sidebar.addEventListener("focusin", function (event) {
+      var link = linkFrom(event);
+      if (link && link.matches(":focus-visible")) { showLabel(link); } else { hideLabel(); }
+    });
+    sidebar.addEventListener("focusout", hideLabel);
+    sidebar.addEventListener("scroll", hideLabel);
+    sidebar.addEventListener("click", hideLabel);
+    document.addEventListener("keydown", function (event) { if (event.key === "Escape") hideLabel(); });
+    desktopQuery.addEventListener("change", hideLabel);
+  }
+
+
+  /* ---------- 9. Wide tables reachable by keyboard ----------
+     A table wider than the screen scrolls sideways inside its wrapper. If
+     the table has no links or buttons, a keyboard user could never focus it
+     to scroll, so the wrapper becomes focusable (only while it overflows). */
+  function setUpScrollRegions() {
+    var focusableSelector = "a[href], button, input, select, textarea, [tabindex]";
+    var wrappers = Array.prototype.slice.call(document.querySelectorAll(".table-scroll-wrapper"));
+    function update() {
+      wrappers.forEach(function (wrapper) {
+        var overflows = wrapper.scrollWidth > wrapper.clientWidth + 1;
+        var hasFocusable = !!wrapper.querySelector(focusableSelector);
+        if (overflows && !hasFocusable) {
+          wrapper.setAttribute("tabindex", "0");
+          wrapper.setAttribute("role", "region");
+          if (!wrapper.hasAttribute("aria-label")) wrapper.setAttribute("aria-label", "Table, scrolls sideways");
+        } else if (wrapper.getAttribute("role") === "region") {
+          wrapper.removeAttribute("tabindex");
+          wrapper.removeAttribute("role");
+          wrapper.removeAttribute("aria-label");
+        }
+      });
+    }
+    update();
+    // Re-check whenever a wrapper changes size (window resized, web fonts
+    // loaded, sidebar collapsed), not only once at page load.
+    if (window.ResizeObserver) {
+      var observer = new ResizeObserver(update);
+      wrappers.forEach(function (wrapper) { observer.observe(wrapper); if (wrapper.firstElementChild) observer.observe(wrapper.firstElementChild); });
+    } else {
+      window.addEventListener("resize", update);
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", function () {
     setUpAccountMenu();
+    setUpSidebarLabels();
+    setUpScrollRegions();
     setUpSettingsDialog();
     setUpConfirmForms();
     document.querySelectorAll(".toast").forEach(setUpToast);

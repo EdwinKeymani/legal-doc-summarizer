@@ -49,14 +49,14 @@
   </div>
   <div class="table-scroll-wrapper">
     <table class="data-table">
-      <thead><tr><th>When</th><th>Who</th><th>What</th><th>Details</th></tr></thead>
+      <thead><tr><th>When</th><th>Who</th><th>What</th><th class="audit-details-cell">Details</th></tr></thead>
       <tbody>
         {% for entry in recent_events %}
         <tr>
           <td><time datetime="{{ entry.occurred_at | iso_utc }}" data-local-format="datetime">{{ entry.occurred_at.strftime('%b %d, %Y %H:%M') }} UTC</time></td>
           <td>{{ audit.actor(entry) }}</td>
           <td>{{ entry.action | audit_action_label }}</td>
-          <td>{{ audit.details(entry) }}</td>
+          <td class="audit-details-cell">{{ audit.details(entry) }}</td>
         </tr>
         {% else %}
         <tr><td colspan="4" class="empty-state">No activity recorded yet.</td></tr>

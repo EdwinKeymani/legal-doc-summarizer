@@ -41,7 +41,7 @@
 <div class="card">
   <div class="table-scroll-wrapper">
     <table class="data-table audit-table">
-      <thead><tr><th>When</th><th>Who</th><th>Role then</th><th>What</th><th>Details</th><th>IP address</th></tr></thead>
+      <thead><tr><th>When</th><th>Who</th><th>Role then</th><th>What</th><th class="audit-details-cell">Details</th><th>IP address</th></tr></thead>
       <tbody>
         {% for entry in entries_page.items %}
         <tr class="{{ 'row-warning' if entry.action in ('access.denied', 'auth.login_failed', 'auth.login_blocked') }}">
@@ -49,7 +49,7 @@
           <td>{{ audit.actor(entry) }}</td>
           <td>{% if entry.actor_role %}<span class="role-badge role-{{ entry.actor_role }}">{{ {'member': 'Member', 'reviewer': 'Reviewer', 'admin': 'Administrator'}.get(entry.actor_role, entry.actor_role) }}</span>{% endif %}</td>
           <td>{{ entry.action | audit_action_label }}</td>
-          <td>{{ audit.details(entry) }}</td>
+          <td class="audit-details-cell">{{ audit.details(entry) }}</td>
           <td><span class="audit-subtle">{{ entry.ip_address or '' }}</span></td>
         </tr>
         {% else %}

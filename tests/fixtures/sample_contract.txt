@@ -1,0 +1,32 @@
+SERVICES AGREEMENT
+
+This Services Agreement is made on 1 March 2026 between Kamau Logistics Ltd (the "Client") and Mwangi Software Solutions Ltd (the "Service Provider"). The Client and the Service Provider are together referred to as the Parties.
+
+1. SERVICES
+The Service Provider shall design, build and deliver a fleet tracking system for the Client by 30 September 2026. The Service Provider shall provide weekly progress reports to the Client. The Client shall give the Service Provider timely access to its premises, data and staff.
+
+2. FEES AND PAYMENT
+The Client shall pay the Service Provider a total fee of KES 1,200,000, payable in three equal instalments. Each invoice is payable within 30 days of receipt. Late payments shall attract interest at 2% per month on the outstanding amount.
+
+3. CONFIDENTIALITY
+Each party shall keep all confidential information of the other party secret and shall not disclose it to any third party without prior written consent. This obligation continues for five years after this Agreement ends.
+
+4. INTELLECTUAL PROPERTY
+All intellectual property created under this Agreement belongs to the Client once the final instalment has been paid. The Service Provider retains the right to reuse its general tools and know-how.
+
+5. LIABILITY AND INDEMNITY
+The Service Provider shall indemnify and hold harmless the Client against all losses, damages and claims arising from any breach of this Agreement. The Service Provider's total liability under this Agreement shall not exceed the fees paid in the preceding three months. Neither party shall be liable for indirect or consequential loss.
+
+6. TERMINATION
+Either party may terminate this Agreement by giving 30 days written notice to the other party. The Client may terminate this Agreement immediately if the Service Provider commits a material breach and fails to remedy it within 14 days of notice. On termination the Client shall pay for all services performed up to the date of termination.
+
+7. FORCE MAJEURE
+Neither party shall be liable for delay caused by events beyond its reasonable control, including floods, strikes or government action.
+
+8. GOVERNING LAW AND DISPUTES
+This Agreement is governed by the laws of Kenya. The Parties shall first try to settle any dispute through mediation, and failing that the courts of Nairobi shall have exclusive jurisdiction.
+
+9. ENTIRE AGREEMENT
+This Agreement is the entire agreement between the Parties and replaces all earlier discussions. Any change must be in writing and signed by both Parties.
+
+IN WITNESS WHEREOF the Parties have signed this Agreement on the date first written above.

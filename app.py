@@ -1410,10 +1410,18 @@ def reassess_document(document_id):
         "file_name": document.file_name, "clauses_rated": newly_assessed_count, "clauses_pending": len(pending_clauses)})
     database.session.commit()
 
+    # Say what actually happened: the old message blamed a "busy" AI even
+    # when no AI key is configured, so retrying could never help.
     if newly_assessed_count == len(pending_clauses):
         flash("Risk assessment completed.", "success")
+    elif not os.environ.get("GEMINI_API_KEY"):
+        flash("AI risk assessment isn't switched on for this site, so these clauses stay marked "
+              "Review. Read them yourself, or ask your administrator about enabling it.", "persistent")
+    elif newly_assessed_count:
+        flash(f"Rated {newly_assessed_count} of {len(pending_clauses)} clauses. The AI service didn't "
+              "answer for the rest; please try again in a minute.")
     else:
-        flash("The AI service is still busy. Please try again in a minute.")
+        flash("The AI service didn't answer. Please try again in a minute.")
     return redirect(url_for("view_document", document_id=document.id))
 
 
@@ -1447,6 +1455,54 @@ AUDIT_ACTION_LABELS = {
 @app.template_filter("audit_action_label")
 def audit_action_label_filter(action):
     return AUDIT_ACTION_LABELS.get(action, action)
+
+
+def role_labels():
+    """member -> Member, admin -> Administrator (read once per request)."""
+    if "role_labels" not in g:
+        g.role_labels = {role.name: role.label for role in Role.query.all()}
+    return g.role_labels
+
+
+@app.template_global()
+def audit_detail_lines(entry):
+    """An audit entry's details as short labelled lines a person can read:
+    'Account: Jane Wanjiru / jane@example.com', 'Role: Member → Administrator'.
+    A value is text, or (main, secondary) for a name with its email.
+
+    The account an event is about is shown only when it is someone other than
+    the person who acted; for 'Signed in' they are the same, so nothing is
+    repeated. Values are turned into words (Yes/No, role names)."""
+    details = dict(entry.details_dict)
+    lines = []
+
+    if entry.action == "auth.login_failed":
+        lines.append(("Email typed", details.pop("email", "")))
+    if entry.target_type == "user" and entry.target_id and entry.target_id != entry.actor_user_id:
+        account = database.session.get(User, entry.target_id)
+        name = details.pop("name", None) or (account.full_name if account else None)
+        email = details.pop("email", None) or (account.email if account else None)
+        # (name, email): shown like the "Who" column, email in small type below
+        lines.append(("Account", (name, email) if name and email else name or email or f"#{entry.target_id}"))
+    else:
+        details.pop("name", None)
+        details.pop("email", None)
+
+    if entry.action == "user.role_changed" and "to" in details:
+        labels = role_labels()
+        new_role = labels.get(details.pop("to"), "?")
+        old_role = details.pop("from", None)
+        lines.append(("Role", f"{labels.get(old_role, old_role)} → {new_role}" if old_role else f"now {new_role}"))
+    if "source" in details:
+        lines.append(("Via", details.pop("source")))
+
+    for key, value in details.items():
+        if isinstance(value, bool):
+            value = "Yes" if value else "No"
+        lines.append((key.replace("_", " ").capitalize(), value))
+    if not lines and entry.target_type and entry.target_type != "user" and entry.target_id:
+        lines.append((entry.target_type.replace("_", " ").capitalize(), f"#{entry.target_id}"))
+    return lines
 
 
 def roles_in_display_order():

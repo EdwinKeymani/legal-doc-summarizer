@@ -162,6 +162,7 @@
 
       function setDrawerOpen(isOpen, returnFocus) {
         body.classList.toggle("sidebar-open", isOpen);
+        window.lockPageScroll("drawer", isOpen);
         overlay.classList.toggle("active", isOpen);
         mobileMenuButton.setAttribute("aria-expanded", String(isOpen));
         mobileMenuButton.setAttribute("aria-label", isOpen ? "Close navigation" : "Open navigation");
